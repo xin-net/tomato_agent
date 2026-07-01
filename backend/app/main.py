@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from app.core.database import Base, engine, get_db
@@ -12,9 +16,13 @@ from app.schemas.cases import (
     FollowupInput,
     ReplyInput,
 )
+from app.schemas.conversation import ConversationMessageInput, ConversationMessageResponse
 from app.services.case_orchestrator import CaseOrchestrator
+from app.services.conversation_service import ConversationService
 
 app = FastAPI(title="Tomato Case Agent", version="0.1.0")
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.on_event("startup")
@@ -27,9 +35,21 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.post("/api/cases", response_model=CaseResponse)
 def create_case(data: CreateCaseInput, db: Session = Depends(get_db)) -> CaseResponse:
     return CaseOrchestrator(db).create_case(data)
+
+
+@app.post("/api/conversation/messages", response_model=ConversationMessageResponse)
+def send_conversation_message(
+    data: ConversationMessageInput, db: Session = Depends(get_db)
+) -> ConversationMessageResponse:
+    return ConversationService(db).handle_message(data)
 
 
 @app.post("/api/cases/{case_id}/reply", response_model=CaseResponse)

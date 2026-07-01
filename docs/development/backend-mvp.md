@@ -41,15 +41,21 @@ uvicorn app.main:app --reload
 服务启动后：
 
 ```text
+GET http://127.0.0.1:8000/
 GET http://127.0.0.1:8000/health
 POST http://127.0.0.1:8000/api/cases
+POST http://127.0.0.1:8000/api/conversation/messages
 ```
+
+`/` 是最小聊天调试界面。用户只需要输入文字，系统会通过 Conversation 入口自动创建或续接 Case。
 
 ## 当前实现范围
 
 已实现：
 
 - Conversation 输入自动创建 Case。
+- `/api/conversation/messages` 聊天入口。
+- `/` 最小网页调试界面。
 - Case、Case Event、Follow-up 持久化模型。
 - 规则版 `AgentDecisionEngine`。
 - `StateMachine` 状态流转约束。

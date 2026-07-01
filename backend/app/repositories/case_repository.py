@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.enums import CaseStatus
 from app.domain.models import Case
 from app.schemas.cases import CreateCaseInput
 
@@ -44,3 +45,14 @@ class CaseRepository:
         if status:
             stmt = stmt.where(Case.status == status)
         return list(self.db.scalars(stmt))
+
+    def latest_active_for_user(self, user_id: str) -> Case | None:
+        stmt = (
+            select(Case)
+            .where(
+                Case.user_id == user_id,
+                Case.status.notin_([CaseStatus.CLOSED.value, CaseStatus.ESCALATED.value]),
+            )
+            .order_by(Case.updated_at.desc(), Case.id.desc())
+        )
+        return self.db.scalar(stmt)
