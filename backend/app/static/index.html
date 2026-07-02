@@ -71,6 +71,17 @@
         padding: 5px 10px;
       }
 
+      .debug-button {
+        min-width: auto;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
       .surface {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -208,6 +219,131 @@
         color: var(--amber);
       }
 
+      .state-machine {
+        display: grid;
+        gap: 10px;
+      }
+
+      .state-stage {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .state-stage.single {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .state-node {
+        min-height: 74px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        background: #fff;
+      }
+
+      .state-code {
+        font-size: 11px;
+        font-weight: 760;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+
+      .state-label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .state-next {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .state-chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1;
+        padding: 3px 5px;
+      }
+
+      .state-node.active {
+        border-color: var(--green);
+        background: #edf8f0;
+        box-shadow: inset 0 0 0 1px var(--green);
+      }
+
+      .state-node.next {
+        border-color: #9fb8a7;
+        background: #f8fcf9;
+      }
+
+      .state-chip.active-next {
+        border-color: var(--green);
+        color: var(--green);
+        background: #edf8f0;
+      }
+
+      .state-node.reserved {
+        background: #fafafa;
+      }
+
+      .state-node.warning {
+        border-color: #f0c36a;
+      }
+
+      .state-node.danger {
+        border-color: #f1a39d;
+      }
+
+      .state-node.done {
+        border-color: #b8c7df;
+      }
+
+      .state-arrow {
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+        line-height: 1;
+      }
+
+      .state-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .legend-dot {
+        width: 9px;
+        height: 9px;
+        display: inline-block;
+        border-radius: 999px;
+        margin-right: 4px;
+        border: 1px solid var(--line);
+      }
+
+      .legend-dot.active {
+        background: #edf8f0;
+        border-color: var(--green);
+      }
+
+      .legend-dot.pending {
+        background: #fff;
+      }
+
+      .legend-dot.next {
+        background: #f8fcf9;
+        border-color: #9fb8a7;
+      }
+
       @media (max-width: 900px) {
         main {
           grid-template-columns: 1fr;
@@ -233,6 +369,7 @@
         <div class="status-strip">
           <span class="pill" id="casePill">未创建病例</span>
           <span class="pill">Conversation → Case</span>
+          <button class="debug-button" id="newSessionButton" type="button">新会话</button>
         </div>
       </header>
 
@@ -267,6 +404,16 @@
         </div>
 
         <div class="section">
+          <h2>状态机观察</h2>
+          <div class="state-machine" id="stateMachine" aria-label="case state machine"></div>
+          <div class="state-legend">
+            <span><span class="legend-dot active"></span>当前状态</span>
+            <span><span class="legend-dot next"></span>可达下一状态</span>
+            <span><span class="legend-dot pending"></span>其他状态</span>
+          </div>
+        </div>
+
+        <div class="section">
           <h2>安全提醒</h2>
           <div id="safety" class="empty">尚无安全提醒。</div>
         </div>
@@ -275,9 +422,97 @@
 
     <script>
       let currentCaseId = null;
-      const userId = "default";
+      let userId = getOrCreateDebugUserId();
+      const stateStages = [
+        [{ code: "NEW", label: "新病例" }],
+        [
+          { code: "NEED_MORE_INFO", label: "待补充" },
+          { code: "DIAGNOSED", label: "已诊断", reserved: true },
+        ],
+        [{ code: "FOLLOWUP_PENDING", label: "待复查" }],
+        [{ code: "FOLLOWUP_REVIEW", label: "复查判断" }],
+        [
+          { code: "IMPROVING", label: "好转", tone: "warning" },
+          { code: "WORSENING", label: "恶化", tone: "danger" },
+          { code: "ESCALATED", label: "人工确认", tone: "danger" },
+        ],
+        [{ code: "CLOSED", label: "已结案", tone: "done" }],
+      ];
+      const transitions = {
+        NEW: ["NEED_MORE_INFO", "FOLLOWUP_PENDING", "ESCALATED"],
+        NEED_MORE_INFO: ["NEED_MORE_INFO", "FOLLOWUP_PENDING", "ESCALATED"],
+        DIAGNOSED: ["FOLLOWUP_PENDING", "ESCALATED"],
+        FOLLOWUP_PENDING: ["FOLLOWUP_REVIEW", "ESCALATED"],
+        FOLLOWUP_REVIEW: ["IMPROVING", "WORSENING", "ESCALATED", "NEED_MORE_INFO", "CLOSED"],
+        IMPROVING: ["FOLLOWUP_PENDING", "CLOSED", "ESCALATED"],
+        WORSENING: ["ESCALATED", "FOLLOWUP_PENDING"],
+        ESCALATED: ["CLOSED"],
+        CLOSED: [],
+      };
 
       const $ = (id) => document.getElementById(id);
+
+      function getOrCreateDebugUserId() {
+        const storageKey = "tomatoAgentDebugUserId";
+        let value = sessionStorage.getItem(storageKey);
+        if (!value) {
+          value = `debug-${crypto.randomUUID()}`;
+          sessionStorage.setItem(storageKey, value);
+        }
+        return value;
+      }
+
+      function resetDebugSession() {
+        sessionStorage.removeItem("tomatoAgentDebugUserId");
+        userId = getOrCreateDebugUserId();
+        currentCaseId = null;
+        $("casePill").textContent = "未创建病例";
+        $("caseId").textContent = "-";
+        $("caseStatus").textContent = "-";
+        $("responseType").textContent = "-";
+        $("diagnosis").textContent = "-";
+        $("followupDate").textContent = "-";
+        $("plan").className = "empty";
+        $("plan").textContent = "尚未生成处置方案。";
+        $("safety").className = "empty";
+        $("safety").textContent = "尚无安全提醒。";
+        renderStateMachine();
+      }
+
+      function renderStateMachine(activeStatus = "") {
+        const nextStates = new Set(transitions[activeStatus] || []);
+        $("stateMachine").innerHTML = stateStages
+          .map((stage, stageIndex) => {
+            const nodes = stage
+              .map((state) => {
+                const classes = ["state-node"];
+                if (state.code === activeStatus) classes.push("active");
+                if (nextStates.has(state.code)) classes.push("next");
+                if (state.reserved) classes.push("reserved");
+                if (state.tone) classes.push(state.tone);
+                const next = transitions[state.code] || [];
+                return `
+                  <div class="${classes.join(" ")}" data-state="${state.code}">
+                    <div class="state-code">${state.code}</div>
+                    <div class="state-label">${state.label}</div>
+                    <div class="state-next">
+                      ${next
+                        .map((target) => {
+                          const chipClass = target === activeStatus ? "state-chip active-next" : "state-chip";
+                          return `<span class="${chipClass}">${target}</span>`;
+                        })
+                        .join("")}
+                    </div>
+                  </div>
+                `;
+              })
+              .join("");
+            const rowClass = stage.length === 1 ? "state-stage single" : "state-stage";
+            const arrow = stageIndex < stateStages.length - 1 ? '<div class="state-arrow">↓</div>' : "";
+            return `<div class="${rowClass}">${nodes}</div>${arrow}`;
+          })
+          .join("");
+      }
 
       function appendMessage(role, text) {
         const node = document.createElement("div");
@@ -306,6 +541,7 @@
         $("casePill").textContent = `Case #${currentCaseId}`;
         $("caseId").textContent = currentCaseId;
         $("caseStatus").textContent = response.status;
+        renderStateMachine(response.status);
         $("responseType").textContent = response.response_type;
         $("diagnosis").textContent = response.diagnosis
           ? `${response.diagnosis.suspected_problem || "-"} / ${response.diagnosis.likelihood || "-"}`
@@ -366,6 +602,10 @@
           $("messageInput").focus();
         }
       });
+
+      $("newSessionButton").addEventListener("click", resetDebugSession);
+
+      renderStateMachine();
     </script>
   </body>
 </html>
