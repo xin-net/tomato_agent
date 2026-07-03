@@ -35,6 +35,7 @@ export function sendConversationMessage(input: {
   user_id: string;
   message: string;
   case_id?: number | null;
+  image_urls?: string[];
 }) {
   return request<ConversationMessageResponse>('/api/conversation/messages', {
     method: 'POST',

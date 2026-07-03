@@ -23,23 +23,38 @@ class ConversationService:
 
         if case_id is None:
             response = self.orchestrator.create_case(
-                CreateCaseInput(user_id=data.user_id, symptoms=data.message)
+                CreateCaseInput(
+                    user_id=data.user_id,
+                    symptoms=data.message,
+                    image_urls=data.image_urls,
+                )
             )
             created_case = True
         else:
             case = self.cases.get(case_id)
             if case is None:
                 response = self.orchestrator.create_case(
-                    CreateCaseInput(user_id=data.user_id, symptoms=data.message)
+                    CreateCaseInput(
+                        user_id=data.user_id,
+                        symptoms=data.message,
+                        image_urls=data.image_urls,
+                    )
                 )
                 created_case = True
             elif case.status == CaseStatus.CLOSED.value:
                 response = self.orchestrator.create_case(
-                    CreateCaseInput(user_id=data.user_id, symptoms=data.message)
+                    CreateCaseInput(
+                        user_id=data.user_id,
+                        symptoms=data.message,
+                        image_urls=data.image_urls,
+                    )
                 )
                 created_case = True
             else:
-                response = self.orchestrator.reply_to_case(case_id, ReplyInput(message=data.message))
+                response = self.orchestrator.reply_to_case(
+                    case_id,
+                    ReplyInput(message=data.message, image_urls=data.image_urls),
+                )
 
         return ConversationMessageResponse(
             case_id=response.case_id,

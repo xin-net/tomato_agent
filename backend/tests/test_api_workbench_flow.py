@@ -44,5 +44,9 @@ def test_workbench_flow_creates_case_submits_followup_and_reads_detail(db_sessio
         detail_body = detail.json()
         assert detail_body["events"]
         assert detail_body["followups"]
+
+        events = client.get(f"/api/cases/{case_id}/events")
+        assert events.status_code == 200
+        assert any(event["event_type"] == "STATE_CHANGED" for event in events.json())
     finally:
         app.dependency_overrides.clear()

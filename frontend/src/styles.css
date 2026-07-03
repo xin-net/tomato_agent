@@ -146,10 +146,38 @@ body {
   border-top: 1px solid #dfe5dc;
 }
 
+.composer-input {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pending-images {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .info-line {
   display: grid;
   grid-template-columns: 76px 1fr;
   gap: 10px;
+}
+
+.image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-strip img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid #dfe5dc;
+  border-radius: 8px;
+  background: #f7f8f5;
 }
 
 .state-flow {

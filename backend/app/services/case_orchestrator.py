@@ -48,6 +48,7 @@ class CaseOrchestrator:
         case = self.cases.create(data, title=title)
         self.events.append(case.id, EventType.CASE_CREATED, user_input=data.symptoms)
         self.events.append(case.id, EventType.USER_MESSAGE, user_input=data.symptoms)
+        self._append_image_evidence(case, data.image_urls)
 
         response = self._handle_message(case, data.symptoms)
         self.db.commit()
@@ -57,6 +58,7 @@ class CaseOrchestrator:
         case = self._require_case(case_id)
         case.symptoms = f"{case.symptoms}\n{data.message}".strip()
         self.events.append(case.id, EventType.USER_MESSAGE, user_input=data.message)
+        self._append_image_evidence(case, data.image_urls)
         response = self._handle_message(case, data.message)
         self.db.commit()
         return response
@@ -132,8 +134,15 @@ class CaseOrchestrator:
         )
 
     def _handle_message(self, case, message: str) -> CaseResponse:
+        existing_structured = dict(case.structured_data or {})
         structured = self.extractor.extract(message)
         case.structured_data = structured.model_dump()
+        if existing_structured.get("image_evidence"):
+            case.structured_data["image_evidence"] = existing_structured["image_evidence"]
+            case.structured_data["image_analysis_status"] = existing_structured.get(
+                "image_analysis_status", "pending_vision_tool"
+            )
+        self._merge_extracted_fields(case, structured.raw)
         if structured.severity and not case.severity:
             case.severity = structured.severity
         if structured.affected_parts:
@@ -277,6 +286,44 @@ class CaseOrchestrator:
         if case is None:
             raise ValueError(f"Case not found: {case_id}")
         return case
+
+    def _append_image_evidence(self, case, image_urls: list[str]) -> None:
+        if not image_urls:
+            return
+
+        current = dict(case.structured_data or {})
+        evidence = list(current.get("image_evidence", []))
+        for image_url in image_urls:
+            if image_url not in evidence:
+                evidence.append(image_url)
+
+        current["image_evidence"] = evidence
+        current["image_analysis_status"] = "pending_vision_tool"
+        case.structured_data = current
+        self.events.append(
+            case.id,
+            EventType.IMAGE_EVIDENCE_ADDED,
+            system_output={
+                "image_count": len(image_urls),
+                "analysis_status": "pending_vision_tool",
+                "note": "MVP 仅保存图片证据，尚未执行视觉识别。",
+            },
+            structured_data={"image_urls": image_urls},
+        )
+
+    def _merge_extracted_fields(self, case, raw: dict) -> None:
+        if raw.get("growth_stage") and not case.growth_stage:
+            case.growth_stage = raw["growth_stage"]
+        if raw.get("recent_weather") and not case.recent_weather:
+            case.recent_weather = raw["recent_weather"]
+        if raw.get("days_to_harvest") is not None and case.days_to_harvest is None:
+            case.days_to_harvest = raw["days_to_harvest"]
+        if raw.get("environment") and not case.environment:
+            case.environment = raw["environment"]
+        if raw.get("recent_pesticide_use") and not case.recent_pesticide_use:
+            case.recent_pesticide_use = raw["recent_pesticide_use"]
+        if raw.get("recent_fertilizer_use") and not case.recent_fertilizer_use:
+            case.recent_fertilizer_use = raw["recent_fertilizer_use"]
 
     def _state_for_trend(self, trend: FollowupTrend) -> CaseStatus:
         if trend == FollowupTrend.IMPROVING:

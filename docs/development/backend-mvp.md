@@ -89,6 +89,7 @@ React 工作台包含：
 
 - 左侧病例列表：查看活跃、已结案和全部 Case。
 - 中央聊天：用户只需要输入自然语言，系统会通过 Conversation 入口自动创建或续接 Case。
+- 图片证据：聊天区可以选择图片，MVP 阶段会把图片保存为 Case/Event 的证据，但不会执行视觉诊断。
 - 右侧当前病例：展示疑似问题、可信度、发生部位、复查日期和当前处置方案。
 - 状态机观察：使用 React Flow 展示完整 Case Status 流程，并高亮当前状态和可达下一状态。
 - 复查与事件记忆：展示 Follow-up 摘要和最近 Case Event 时间线。
@@ -114,11 +115,13 @@ React 工作台包含：
 - Markdown Knowledge Memory。
 - 规则版诊断、处置方案和复查比较。
 - 复查提交时先进入 `FOLLOWUP_REVIEW`，再根据趋势进入好转、继续观察、待补充或升级。
+- 图片 Evidence Memory：`image_urls` 会写入 `structured_data.image_evidence`，并追加 `IMAGE_EVIDENCE_ADDED` 事件。
+- 文本结构化增强：规则抽取会尽量识别生长阶段、近期天气、种植环境、距离采收天数、近期施肥和近期用药。
 
 暂未实现：
 
 - LLM 接入。
-- 图片上传和多模态识别。
+- 图片多模态识别。
 - 日历/提醒同步。
 - Word/PDF 知识导入。
 - 用户登录和真实多用户权限。

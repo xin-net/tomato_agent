@@ -31,6 +31,12 @@ def test_create_case_diagnoses_and_creates_followup_when_info_is_enough(db_sessi
     assert response.diagnosis.suspected_problem == "番茄早疫病"
     assert response.followup is not None
 
+    detail = CaseOrchestrator(db_session).cases.get_detail(response.case_id)
+    assert detail is not None
+    assert detail.growth_stage == "结果期"
+    assert detail.recent_weather == "连续阴雨"
+    assert detail.days_to_harvest == 10
+
 
 def test_followup_worsening_escalates_case(db_session):
     created = CaseOrchestrator(db_session).create_case(

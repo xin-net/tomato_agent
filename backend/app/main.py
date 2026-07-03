@@ -9,6 +9,7 @@ from app.core.database import Base, engine, get_db
 from app.repositories.case_repository import CaseRepository
 from app.schemas.cases import (
     CaseDetail,
+    CaseEventRead,
     CaseListItem,
     CaseResponse,
     CloseCaseInput,
@@ -95,3 +96,11 @@ def get_case(case_id: int, db: Session = Depends(get_db)) -> CaseDetail:
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return case
+
+
+@app.get("/api/cases/{case_id}/events", response_model=list[CaseEventRead])
+def list_case_events(case_id: int, db: Session = Depends(get_db)) -> list[CaseEventRead]:
+    case = CaseRepository(db).get_detail(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return list(case.events)

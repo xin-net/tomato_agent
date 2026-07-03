@@ -18,10 +18,12 @@ class CreateCaseInput(BaseModel):
     recent_fertilizer_use: str | None = None
     recent_pesticide_use: str | None = None
     days_to_harvest: int | None = None
+    image_urls: list[str] = Field(default_factory=list)
 
 
 class ReplyInput(BaseModel):
     message: str
+    image_urls: list[str] = Field(default_factory=list)
 
 
 class FollowupInput(BaseModel):

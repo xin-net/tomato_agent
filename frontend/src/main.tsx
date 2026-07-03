@@ -22,6 +22,7 @@ import {
   Tag,
   Timeline,
   Typography,
+  Upload,
   message,
   theme,
 } from 'antd';
@@ -31,6 +32,7 @@ import {
   ClockCircleOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  PictureOutlined,
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
@@ -115,6 +117,7 @@ function AgentWorkbench() {
     },
   ]);
   const [input, setInput] = useState('');
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [userId, setUserId] = useState(createDebugUserId);
   const [loadingCases, setLoadingCases] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -172,16 +175,24 @@ function AgentWorkbench() {
 
   async function handleSend() {
     const text = input.trim();
-    if (!text) return;
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text };
+    if (!text && imageUrls.length === 0) return;
+    const content = text || '已上传图片证据，请结合病例上下文判断。';
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content,
+      imageUrls,
+    };
     setMessages((current) => [...current, userMessage]);
     setInput('');
+    setImageUrls([]);
     setSending(true);
     try {
       const result = await sendConversationMessage({
         user_id: userId,
         case_id: selectedCaseId,
-        message: text,
+        message: content,
+        image_urls: imageUrls,
       });
       const agentMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -212,6 +223,15 @@ function AgentWorkbench() {
         content: '已开始新的测试会话。下一条消息会自动创建新的病例。',
       },
     ]);
+    setImageUrls([]);
+  }
+
+  async function handleImageSelection(file: File) {
+    const encoded = await fileToDataUrl(file);
+    setImageUrls((current) => {
+      if (current.length >= 4) return current;
+      return [...current, encoded];
+    });
   }
 
   async function handleFollowupSubmit(values: {
@@ -348,26 +368,50 @@ function AgentWorkbench() {
                 <div key={item.id} className={`chat-bubble ${item.role}`}>
                   <div className="bubble-role">{item.role === 'user' ? '用户' : 'Agent'}</div>
                   <Paragraph>{item.content}</Paragraph>
+                  {item.imageUrls?.length ? <ImageStrip urls={item.imageUrls} /> : null}
                 </div>
               ))}
             </div>
 
             <div className="composer">
-              <TextArea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                placeholder="描述症状、回答追问，或说明复查变化..."
-                autoSize={{ minRows: 2, maxRows: 5 }}
-                onPressEnter={(event) => {
-                  if (!event.shiftKey) {
-                    event.preventDefault();
-                    void handleSend();
-                  }
-                }}
-              />
-              <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void handleSend()}>
-                发送
-              </Button>
+              <div className="composer-input">
+                <TextArea
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="描述症状、回答追问，或说明复查变化..."
+                  autoSize={{ minRows: 2, maxRows: 5 }}
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault();
+                      void handleSend();
+                    }
+                  }}
+                />
+                {imageUrls.length ? (
+                  <div className="pending-images">
+                    <ImageStrip urls={imageUrls} />
+                    <Button size="small" onClick={() => setImageUrls([])}>
+                      清空图片
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+              <Space direction="vertical">
+                <Upload
+                  accept="image/*"
+                  showUploadList={false}
+                  multiple
+                  beforeUpload={(file) => {
+                    void handleImageSelection(file);
+                    return Upload.LIST_IGNORE;
+                  }}
+                >
+                  <Button icon={<PictureOutlined />}>图片</Button>
+                </Upload>
+                <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void handleSend()}>
+                  发送
+                </Button>
+              </Space>
             </div>
           </section>
         </Content>
@@ -381,7 +425,15 @@ function AgentWorkbench() {
                     <InfoLine label="疑似问题" value={caseDetail.suspected_problem || '-'} />
                     <InfoLine label="可信度" value={caseDetail.likelihood || '-'} />
                     <InfoLine label="部位" value={caseDetail.affected_parts.join('、') || '-'} />
+                    <InfoLine label="阶段" value={caseDetail.growth_stage || '-'} />
+                    <InfoLine label="环境" value={caseDetail.environment || '-'} />
+                    <InfoLine label="天气" value={caseDetail.recent_weather || '-'} />
+                    <InfoLine
+                      label="采收"
+                      value={caseDetail.days_to_harvest != null ? `${caseDetail.days_to_harvest} 天` : '-'}
+                    />
                     <InfoLine label="复查日期" value={formatDate(caseDetail.followup_date)} />
+                    <ImageEvidence detail={caseDetail} />
                     {caseDetail.current_plan?.summary ? (
                       <Alert type="success" showIcon message={caseDetail.current_plan.summary} />
                     ) : null}
@@ -443,6 +495,15 @@ function AgentWorkbench() {
   );
 }
 
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 function PanelTitle({ icon, text }: { icon: React.ReactNode; text: string }) {
   return (
     <Space>
@@ -458,6 +519,36 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
       <Text type="secondary">{label}</Text>
       <Text>{value}</Text>
     </div>
+  );
+}
+
+function ImageStrip({ urls }: { urls: string[] }) {
+  return (
+    <div className="image-strip">
+      {urls.map((url, index) => (
+        <img key={`${url.slice(0, 48)}-${index}`} src={url} alt={`病例图片证据 ${index + 1}`} />
+      ))}
+    </div>
+  );
+}
+
+function ImageEvidence({ detail }: { detail: CaseDetail }) {
+  const imageEvidence = Array.isArray(detail.structured_data.image_evidence)
+    ? (detail.structured_data.image_evidence as string[])
+    : [];
+  if (!imageEvidence.length) return null;
+  return (
+    <Alert
+      type="info"
+      showIcon
+      message="图片证据已保存"
+      description={
+        <Space direction="vertical" size={8} className="full-width">
+          <Text type="secondary">MVP 阶段尚未执行视觉识别，图片只作为 Case Event 和后续多模态工具的证据。</Text>
+          <ImageStrip urls={imageEvidence} />
+        </Space>
+      }
+    />
   );
 }
 

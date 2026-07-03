@@ -30,3 +30,18 @@ def test_conversation_message_continues_latest_active_case(db_session):
 
     assert second.created_case is False
     assert second.case_id == first.case_id
+
+
+def test_conversation_message_records_image_evidence(db_session):
+    response = ConversationService(db_session).handle_message(
+        ConversationMessageInput(
+            user_id="u1",
+            message="下部老叶有褐色斑点，现在结果期，距离采收大概 10 天。",
+            image_urls=["data:image/png;base64,abc123"],
+        )
+    )
+
+    case = ConversationService(db_session).cases.get_detail(response.case_id)
+    assert case is not None
+    assert case.structured_data["image_evidence"] == ["data:image/png;base64,abc123"]
+    assert any(event.event_type == "IMAGE_EVIDENCE_ADDED" for event in case.events)
