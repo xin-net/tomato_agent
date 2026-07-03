@@ -13,7 +13,10 @@ class FollowupCompareTool:
             any(word in data.description for word in ["变多", "扩散", "上部", "更严重", "果实"]),
         ]
         improving_signals = [
-            any(word in data.description for word in ["没有新的", "无新增", "稳定", "好多了", "好转"]),
+            any(
+                word in data.description
+                for word in ["没有新的", "没有增加", "无新增", "未新增", "稳定", "好多了", "好转"]
+            ),
             data.has_new_spots is False,
             data.spots_expanded is False,
             data.spread_to_new_parts is False,

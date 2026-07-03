@@ -22,7 +22,10 @@ from app.services.conversation_service import ConversationService
 
 app = FastAPI(title="Tomato Case Agent", version="0.1.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if (FRONTEND_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
 
 
 @app.on_event("startup")
@@ -37,6 +40,9 @@ def health() -> dict[str, str]:
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
+    frontend_index = FRONTEND_DIST_DIR / "index.html"
+    if frontend_index.exists():
+        return FileResponse(frontend_index)
     return FileResponse(STATIC_DIR / "index.html")
 
 

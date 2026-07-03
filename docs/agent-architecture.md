@@ -472,10 +472,11 @@ Response -> closure summary
 
 ```text
 Backend: Python + FastAPI
-Persistence: SQLite
+Frontend: Vite + React + TypeScript + Ant Design + React Flow
+Persistence: PostgreSQL via SQLAlchemy + psycopg
 Schemas: Pydantic
 Knowledge Memory: 结构化 Markdown 文件
-LLM use: 症状结构化、Agent Decision、诊断措辞、复查比较
+LLM use: MVP 暂不接入，先使用规则版症状结构化、Agent Decision、诊断和复查比较
 Deterministic code: 状态流转、安全策略、持久化、复查日期
 ```
 

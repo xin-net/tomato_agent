@@ -68,6 +68,17 @@ class CaseOrchestrator:
 
         trend, evidence = self.followup_compare.compare(data)
         requested_state = self._state_for_trend(trend)
+        if (
+            CaseStatus(case.status) == CaseStatus.FOLLOWUP_PENDING
+            and requested_state
+            in {
+                CaseStatus.IMPROVING,
+                CaseStatus.WORSENING,
+                CaseStatus.NEED_MORE_INFO,
+                CaseStatus.CLOSED,
+            }
+        ):
+            self.state_machine.apply(case, CaseStatus.FOLLOWUP_REVIEW, "进入复查判断")
         transition = self.state_machine.apply(case, requested_state, "复查趋势判断")
         if not transition.allowed:
             requested_state = CaseStatus.ESCALATED
@@ -274,6 +285,8 @@ class CaseOrchestrator:
             return CaseStatus.ESCALATED
         if trend == FollowupTrend.NEEDS_HUMAN_CONFIRMATION:
             return CaseStatus.ESCALATED
+        if trend == FollowupTrend.INSUFFICIENT_INFO:
+            return CaseStatus.NEED_MORE_INFO
         return CaseStatus.FOLLOWUP_REVIEW
 
     def _followup_message(self, trend: FollowupTrend) -> str:

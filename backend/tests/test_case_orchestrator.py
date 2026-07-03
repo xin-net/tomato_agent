@@ -56,6 +56,31 @@ def test_followup_worsening_escalates_case(db_session):
     assert response.trend is not None
 
 
+def test_followup_improving_moves_to_improving(db_session):
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="下部老叶有褐色斑点，一圈一圈的，最近连续阴雨，现在结果期，距离采收大概 10 天。",
+            affected_parts=["下部老叶"],
+            recent_weather="连续阴雨",
+            days_to_harvest=10,
+        )
+    )
+
+    response = CaseOrchestrator(db_session).submit_followup(
+        created.case_id,
+        FollowupInput(
+            description="病斑没有增加，新叶正常，整体稳定。",
+            has_new_spots=False,
+            spots_expanded=False,
+            spread_to_new_parts=False,
+        ),
+    )
+
+    assert response.status == CaseStatus.IMPROVING
+    assert response.trend is not None
+
+
 def test_near_harvest_blocks_chemical_details(db_session):
     response = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(
