@@ -30,6 +30,7 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  DownloadOutlined,
   FileTextOutlined,
   HistoryOutlined,
   PictureOutlined,
@@ -43,7 +44,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   closeCase,
+  downloadCaseReport,
   getCase,
+  getSystemStatus,
   listCases,
   sendConversationMessage,
   submitFollowup,
@@ -125,6 +128,8 @@ function AgentWorkbench() {
   const [filter, setFilter] = useState<string>('active');
   const [followupOpen, setFollowupOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<string>('checking');
+  const [eventLimit, setEventLimit] = useState(8);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const { nodes, edges } = useMemo(
@@ -161,6 +166,9 @@ function AgentWorkbench() {
 
   useEffect(() => {
     void refreshCases();
+    void getSystemStatus()
+      .then((result) => setSystemStatus(result.status))
+      .catch(() => setSystemStatus('offline'));
   }, [refreshCases]);
 
   useEffect(() => {
@@ -280,6 +288,15 @@ function AgentWorkbench() {
     }
   }
 
+  async function handleDownloadReport() {
+    if (!selectedCaseId) return;
+    try {
+      await downloadCaseReport(selectedCaseId);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '报告导出失败');
+    }
+  }
+
   return (
     <Layout className="app-shell">
       <Header className="app-header">
@@ -288,6 +305,9 @@ function AgentWorkbench() {
           <Text type="secondary">Conversation → Case → Decision → Guardrails → Tools → Memory → Follow-up</Text>
         </Space>
         <Space>
+          <Tag color={systemStatus === 'ok' ? 'green' : systemStatus === 'checking' ? 'blue' : 'red'}>
+            API {systemStatus}
+          </Tag>
           <Button icon={<ReloadOutlined />} onClick={() => void refreshCases()}>
             刷新
           </Button>
@@ -359,6 +379,13 @@ function AgentWorkbench() {
                   onClick={() => setCloseOpen(true)}
                 >
                   结案
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  disabled={!selectedCaseId}
+                  onClick={() => void handleDownloadReport()}
+                >
+                  报告
                 </Button>
               </Space>
             </div>
@@ -468,7 +495,12 @@ function AgentWorkbench() {
                   <Space direction="vertical" className="full-width" size={12}>
                     <FollowupSummary detail={caseDetail} />
                     <Divider className="tight-divider" />
-                    <EventTimeline detail={caseDetail} />
+                    <EventTimeline detail={caseDetail} limit={eventLimit} />
+                    {caseDetail.events.length > eventLimit ? (
+                      <Button block onClick={() => setEventLimit((current) => current + 8)}>
+                        查看更多事件
+                      </Button>
+                    ) : null}
                   </Space>
                 ) : (
                   <Empty description="暂无事件" />
@@ -571,8 +603,8 @@ function FollowupSummary({ detail }: { detail: CaseDetail }) {
   );
 }
 
-function EventTimeline({ detail }: { detail: CaseDetail }) {
-  const items = detail.events.slice(-8).reverse().map((event) => ({
+function EventTimeline({ detail, limit }: { detail: CaseDetail; limit: number }) {
+  const items = detail.events.slice(-limit).reverse().map((event) => ({
     color: event.event_type === 'STATE_CHANGED' ? 'green' : 'blue',
     children: (
       <Space direction="vertical" size={2}>

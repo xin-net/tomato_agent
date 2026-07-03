@@ -31,6 +31,15 @@ export function getCase(caseId: number) {
   return request<CaseDetail>(`/api/cases/${caseId}`);
 }
 
+export function getSystemStatus() {
+  return request<{
+    status: string;
+    app: string;
+    version: string;
+    frontend_dist_available: boolean;
+  }>('/api/system/status');
+}
+
 export function sendConversationMessage(input: {
   user_id: string;
   message: string;
@@ -71,4 +80,18 @@ export function closeCase(caseId: number, summary?: string) {
     method: 'POST',
     body: JSON.stringify({ summary }),
   });
+}
+
+export async function downloadCaseReport(caseId: number) {
+  const response = await fetch(`/api/cases/${caseId}/report`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `tomato-case-${caseId}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
