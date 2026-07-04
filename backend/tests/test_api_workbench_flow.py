@@ -120,3 +120,29 @@ def test_case_api_requires_authentication(db_session):
         assert response.status_code == 401
     finally:
         app.dependency_overrides.clear()
+
+
+def test_oauth_user_creation_reuses_provider_identity(db_session):
+    from app.repositories.user_repository import UserRepository
+
+    users = UserRepository(db_session)
+    created = users.get_or_create_oauth_user(
+        provider="github",
+        provider_subject="123",
+        email="grower@example.com",
+        display_name="Tomato Grower",
+        avatar_url="https://example.com/avatar.png",
+    )
+    reused = users.get_or_create_oauth_user(
+        provider="github",
+        provider_subject="123",
+        email="updated@example.com",
+        display_name="Other Name",
+        avatar_url=None,
+    )
+
+    assert reused.id == created.id
+    assert reused.auth_provider == "github"
+    assert reused.provider_subject == "123"
+    assert reused.email == "updated@example.com"
+    assert reused.password_hash is None

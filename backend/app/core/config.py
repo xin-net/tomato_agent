@@ -20,6 +20,12 @@ class Settings(BaseSettings):
         "http://localhost:5174,http://127.0.0.1:5174,"
         "http://localhost:8000,http://127.0.0.1:8000"
     )
+    public_base_url: str = "http://127.0.0.1:8000"
+    frontend_base_url: str = "http://127.0.0.1:5174"
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 

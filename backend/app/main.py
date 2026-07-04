@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from app.schemas.conversation import ConversationMessageInput, ConversationMessa
 from app.schemas.reminders import ReminderCreate, ReminderRead, ReminderUpdate
 from app.services.case_orchestrator import CaseOrchestrator
 from app.services.conversation_service import ConversationService
+from app.services.oauth_service import OAuthService
 
 app = FastAPI(title="Tomato Case Agent", version="0.1.0")
 settings = get_settings()
@@ -97,6 +98,48 @@ def login(data: UserLogin, db: Session = Depends(get_db)) -> TokenResponse:
 @app.get("/api/auth/me", response_model=UserRead)
 def me(current_user: User = Depends(get_current_user)) -> UserRead:
     return UserRead.model_validate(current_user)
+
+
+@app.get("/api/auth/oauth/{provider}/start")
+def oauth_start(provider: str, response: Response) -> RedirectResponse:
+    url, state = OAuthService(settings).authorize_url(provider)
+    response = RedirectResponse(url)
+    response.set_cookie(
+        key=f"oauth_state_{provider}",
+        value=state,
+        httponly=True,
+        samesite="lax",
+        max_age=600,
+    )
+    return response
+
+
+@app.get("/api/auth/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    code: str,
+    state: str,
+    oauth_state_google: str | None = Cookie(default=None),
+    oauth_state_github: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    expected_state = oauth_state_google if provider == "google" else oauth_state_github
+    if not expected_state or expected_state != state:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+
+    profile = await OAuthService(settings).fetch_profile(provider, code)
+    user = UserRepository(db).get_or_create_oauth_user(
+        provider=profile.provider,
+        provider_subject=profile.subject,
+        email=profile.email,
+        display_name=profile.name,
+        avatar_url=profile.avatar_url,
+    )
+    db.commit()
+    token = create_access_token(str(user.id), {"role": user.role})
+    redirect = RedirectResponse(f"{settings.frontend_base_url}/?access_token={token}")
+    redirect.delete_cookie(f"oauth_state_{provider}")
+    return redirect
 
 
 @app.post("/api/cases", response_model=CaseResponse)

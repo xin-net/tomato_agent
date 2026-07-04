@@ -9,7 +9,10 @@ import type {
 } from './types';
 
 const TOKEN_KEY = 'tomatoAgentAccessToken';
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
+).replace(/\/$/, '');
 
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -18,6 +21,10 @@ export function getStoredToken() {
 export function setStoredToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function oauthStartUrl(provider: 'google' | 'github') {
+  return `${API_BASE_URL}/api/auth/oauth/${provider}/start`;
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {

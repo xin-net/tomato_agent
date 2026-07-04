@@ -59,6 +59,7 @@ import {
   listCases,
   login,
   me,
+  oauthStartUrl,
   register,
   setStoredToken,
   sendConversationMessage,
@@ -197,6 +198,13 @@ function AgentWorkbench() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthToken = params.get('access_token');
+    if (oauthToken) {
+      setStoredToken(oauthToken);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     if (!getStoredToken()) {
       setAuthChecking(false);
       return;
@@ -695,7 +703,7 @@ function LoginPage({
   }
 
   function handleSocialLogin(provider: 'Google' | 'GitHub') {
-    message.info(`${provider} 登录需要先配置 OAuth Client ID、Client Secret 和回调地址。`);
+    window.location.href = oauthStartUrl(provider.toLowerCase() as 'google' | 'github');
   }
 
   return (

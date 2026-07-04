@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -47,3 +48,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
 
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
+
+
+def make_random_token(bytes_count: int = 16) -> str:
+    return secrets.token_urlsafe(bytes_count).replace("-", "").replace("_", "")[: bytes_count * 2]

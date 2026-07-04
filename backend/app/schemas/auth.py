@@ -16,6 +16,9 @@ class UserRead(BaseModel):
     username: str
     role: str
     is_active: bool
+    email: str | None = None
+    avatar_url: str | None = None
+    auth_provider: str = "password"
 
     model_config = {"from_attributes": True}
 
