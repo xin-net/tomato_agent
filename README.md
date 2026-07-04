@@ -145,5 +145,5 @@ alembic upgrade head
 - 视觉工具已接入 OpenAI SDK 边界，但真实图片识别需要配置 `OPENAI_API_KEY` 后再进一步调试提示词和结构化输出。
 - 天气工具当前优先解析用户描述，真实天气 API 适配器预留在 `WEATHER_API_KEY` 后续接入。
 - 日历提醒当前是系统内部提醒；Google/Outlook/系统通知属于后续外部 Tool Adapter。
-- Google/GitHub 登录入口已在前端预留；真正启用需要先创建对应 OAuth App，并配置 Client ID、Client Secret 和回调地址。
+- Google/GitHub OAuth 登录已接入；本地使用前需要在对应 OAuth App 后台配置回调地址，并在 `backend/.env` 填写 Client ID / Client Secret。
 - 知识库仍是人工整理 Markdown，Word/PDF RAG 暂未实现。

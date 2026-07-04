@@ -711,6 +711,14 @@ function LoginPage({
       <div className="login-backdrop" />
       <div className="login-ambient ambient-one" />
       <div className="login-ambient ambient-two" />
+      <div className="login-light-beam" />
+      <div className="login-particles" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
 
       <section className="login-story">
         <div className="brand-mark">
@@ -746,6 +754,7 @@ function LoginPage({
       </section>
 
       <section className="login-form-wrap">
+        <div className="login-form-halo" />
         <div className="login-card">
           <Space direction="vertical" size={20} className="full-width">
             <Space direction="vertical" size={4}>

@@ -78,7 +78,7 @@ body {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, rgba(7, 18, 11, 0.76) 0%, rgba(10, 24, 14, 0.48) 45%, rgba(248, 250, 246, 0.92) 70%, #ffffff 100%),
+    linear-gradient(90deg, rgba(7, 18, 11, 0.8) 0%, rgba(8, 22, 13, 0.54) 42%, rgba(9, 22, 13, 0.36) 64%, rgba(8, 18, 11, 0.5) 100%),
     url("./assets/tomato-greenhouse-login.webp") center / cover no-repeat;
   transform: scale(1.03);
   animation: heroDrift 22s ease-in-out infinite alternate;
@@ -93,6 +93,18 @@ body {
     radial-gradient(circle at 25% 30%, rgba(247, 96, 68, 0.2), transparent 26%);
   mix-blend-mode: screen;
   animation: lightSweep 9s ease-in-out infinite;
+}
+
+.login-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.5), transparent 65%);
+  opacity: 0.45;
 }
 
 .login-ambient {
@@ -117,6 +129,65 @@ body {
   top: 8%;
   background: rgba(218, 78, 52, 0.48);
   animation: floatSlow 10s ease-in-out infinite reverse;
+}
+
+.login-light-beam {
+  position: absolute;
+  top: -18%;
+  right: 28%;
+  width: 18vw;
+  height: 145vh;
+  transform: rotate(23deg);
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  filter: blur(20px);
+  opacity: 0.5;
+  animation: beamBreath 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.login-particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.login-particles span {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.55);
+  animation: particleFloat 9s ease-in-out infinite;
+}
+
+.login-particles span:nth-child(1) {
+  left: 14%;
+  top: 28%;
+}
+
+.login-particles span:nth-child(2) {
+  left: 38%;
+  top: 18%;
+  animation-delay: -2s;
+}
+
+.login-particles span:nth-child(3) {
+  left: 58%;
+  top: 72%;
+  animation-delay: -4s;
+}
+
+.login-particles span:nth-child(4) {
+  right: 18%;
+  top: 22%;
+  animation-delay: -5s;
+}
+
+.login-particles span:nth-child(5) {
+  right: 34%;
+  bottom: 16%;
+  animation-delay: -7s;
 }
 
 .login-story {
@@ -234,14 +305,42 @@ body {
   place-items: center;
 }
 
+.login-form-halo {
+  position: absolute;
+  width: 520px;
+  height: 520px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.12) 42%, transparent 70%);
+  filter: blur(18px);
+  animation: floatSlow 11s ease-in-out infinite;
+}
+
 .login-card {
+  position: relative;
   width: min(430px, 100%);
   padding: 34px;
-  border: 1px solid rgba(216, 226, 212, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 30px 90px rgba(20, 38, 24, 0.18);
-  backdrop-filter: blur(20px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.46));
+  box-shadow: 0 32px 110px rgba(7, 18, 11, 0.28);
+  backdrop-filter: blur(24px) saturate(1.18);
+  overflow: hidden;
+}
+
+.login-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.42), transparent 34%, rgba(255, 255, 255, 0.18) 58%, transparent);
+  transform: translateX(-70%);
+  animation: glassSheen 10s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.login-card > * {
+  position: relative;
 }
 
 .login-card .ant-form-item {
@@ -294,6 +393,41 @@ body {
   }
   50% {
     transform: translateY(-6px);
+  }
+}
+
+@keyframes beamBreath {
+  0%,
+  100% {
+    opacity: 0.24;
+    transform: rotate(23deg) translateX(-18px);
+  }
+  50% {
+    opacity: 0.58;
+    transform: rotate(23deg) translateX(18px);
+  }
+}
+
+@keyframes particleFloat {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: translate3d(0, 0, 0) scale(0.85);
+  }
+  50% {
+    opacity: 0.82;
+    transform: translate3d(18px, -26px, 0) scale(1.18);
+  }
+}
+
+@keyframes glassSheen {
+  0%,
+  48%,
+  100% {
+    transform: translateX(-82%);
+  }
+  62% {
+    transform: translateX(82%);
   }
 }
 

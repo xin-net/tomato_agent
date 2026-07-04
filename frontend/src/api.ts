@@ -9,10 +9,7 @@ import type {
 } from './types';
 
 const TOKEN_KEY = 'tomatoAgentAccessToken';
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
-).replace(/\/$/, '');
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
