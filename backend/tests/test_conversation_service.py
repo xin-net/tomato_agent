@@ -45,3 +45,6 @@ def test_conversation_message_records_image_evidence(db_session):
     assert case is not None
     assert case.structured_data["image_evidence"] == ["data:image/png;base64,abc123"]
     assert any(event.event_type == "IMAGE_EVIDENCE_ADDED" for event in case.events)
+    user_message = next(event for event in case.events if event.event_type == "USER_MESSAGE")
+    assert user_message.structured_data["image_urls"] == ["data:image/png;base64,abc123"]
+    assert any(event.event_type == "AGENT_RESPONSE" for event in case.events)

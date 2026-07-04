@@ -99,6 +99,7 @@ React 工作台包含：
 - 复查提交：把用户复查描述和结构化变化信号提交给后端比较。
 - 结案：用户确认后通过状态机进入 `CLOSED`。
 - 报告导出：导出 Markdown 病例报告，用于人工确认或验收。
+- 对话回放：切换病例时，前端会从 `USER_MESSAGE`、`FOLLOWUP_SUBMITTED` 和 `AGENT_RESPONSE` 事件恢复聊天记录。
 
 调试界面右侧包含“状态机观察”面板，会展示 MVP 的 Case Status 流程，并高亮当前病例状态。这个面板只用于开发测试阶段观察状态流转，不代表最终产品 UI。
 
@@ -122,6 +123,7 @@ React 工作台包含：
 - 图片 Evidence Memory：`image_urls` 会写入 `structured_data.image_evidence`，并追加 `IMAGE_EVIDENCE_ADDED` 事件。
 - 文本结构化增强：规则抽取会尽量识别生长阶段、近期天气、种植环境、距离采收天数、近期施肥和近期用药。
 - 系统状态 API 和 Markdown 病例报告导出。
+- Agent 用户可见回复会写入 `AGENT_RESPONSE` 事件，用于对话回放和审计。
 
 暂未实现：
 

@@ -47,23 +47,27 @@ class CaseOrchestrator:
         title = self._make_title(data.symptoms)
         case = self.cases.create(data, title=title)
         self.events.append(case.id, EventType.CASE_CREATED, user_input=data.symptoms)
-        self.events.append(case.id, EventType.USER_MESSAGE, user_input=data.symptoms)
+        self._append_user_message(case.id, data.symptoms, data.image_urls)
         self._append_image_evidence(case, data.image_urls)
 
         response = self._handle_message(case, data.symptoms)
+        self._append_agent_response(case.id, response)
         self.db.commit()
         return response
 
     def reply_to_case(self, case_id: int, data: ReplyInput) -> CaseResponse:
         case = self._require_case(case_id)
         case.symptoms = f"{case.symptoms}\n{data.message}".strip()
-        self.events.append(case.id, EventType.USER_MESSAGE, user_input=data.message)
+        self._append_user_message(case.id, data.message, data.image_urls)
         self._append_image_evidence(case, data.image_urls)
         response = self._handle_message(case, data.message)
+        self._append_agent_response(case.id, response)
         self.db.commit()
         return response
 
-    def submit_followup(self, case_id: int, data: FollowupInput) -> CaseResponse:
+    def submit_followup(
+        self, case_id: int, data: FollowupInput, record_response: bool = True
+    ) -> CaseResponse:
         case = self._require_case(case_id)
         active = self.followups.active_for_case(case.id)
         self.events.append(case.id, EventType.FOLLOWUP_SUBMITTED, user_input=data.description)
@@ -98,8 +102,7 @@ class CaseOrchestrator:
         )
 
         message = self._followup_message(trend)
-        self.db.commit()
-        return CaseResponse(
+        response = CaseResponse(
             case_id=case.id,
             status=CaseStatus(case.status),
             response_type="followup_result",
@@ -107,6 +110,10 @@ class CaseOrchestrator:
             trend=trend,
             followup=FollowupRead.model_validate(active) if active else None,
         )
+        if record_response:
+            self._append_agent_response(case.id, response)
+        self.db.commit()
+        return response
 
     def close_case(self, case_id: int, data: CloseCaseInput) -> CaseResponse:
         case = self._require_case(case_id)
@@ -125,13 +132,15 @@ class CaseOrchestrator:
             EventType.CASE_CLOSED,
             system_output={"summary": summary},
         )
-        self.db.commit()
-        return CaseResponse(
+        response = CaseResponse(
             case_id=case.id,
             status=CaseStatus(case.status),
             response_type="closed",
             message=f"病例已结案。{summary}",
         )
+        self._append_agent_response(case.id, response)
+        self.db.commit()
+        return response
 
     def _handle_message(self, case, message: str) -> CaseResponse:
         existing_structured = dict(case.structured_data or {})
@@ -175,7 +184,7 @@ class CaseOrchestrator:
             return self._ask_more_info(case, decision)
         if decision.next_action == AgentAction.COMPARE_FOLLOWUP:
             followup_input = FollowupInput(description=message)
-            return self.submit_followup(case.id, followup_input)
+            return self.submit_followup(case.id, followup_input, record_response=False)
         if decision.next_action == AgentAction.ESCALATE:
             return self._escalate(case, decision.reason)
         if decision.next_action == AgentAction.CLOSE_CASE:
@@ -309,6 +318,21 @@ class CaseOrchestrator:
                 "note": "MVP 仅保存图片证据，尚未执行视觉识别。",
             },
             structured_data={"image_urls": image_urls},
+        )
+
+    def _append_user_message(self, case_id: int, message: str, image_urls: list[str]) -> None:
+        self.events.append(
+            case_id,
+            EventType.USER_MESSAGE,
+            user_input=message,
+            structured_data={"image_urls": image_urls} if image_urls else {},
+        )
+
+    def _append_agent_response(self, case_id: int, response: CaseResponse) -> None:
+        self.events.append(
+            case_id,
+            EventType.AGENT_RESPONSE,
+            system_output=response.model_dump(mode="json"),
         )
 
     def _merge_extracted_fields(self, case, raw: dict) -> None:

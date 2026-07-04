@@ -30,9 +30,11 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  CloseOutlined,
   DownloadOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  MinusOutlined,
   PictureOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -130,6 +132,8 @@ function AgentWorkbench() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [systemStatus, setSystemStatus] = useState<string>('checking');
   const [eventLimit, setEventLimit] = useState(8);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewScale, setPreviewScale] = useState(1);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const { nodes, edges } = useMemo(
@@ -156,7 +160,9 @@ function AgentWorkbench() {
     }
     setLoadingDetail(true);
     try {
-      setCaseDetail(await getCase(caseId));
+      const detail = await getCase(caseId);
+      setCaseDetail(detail);
+      setMessages(caseDetailToMessages(detail));
     } catch (error) {
       message.error(error instanceof Error ? error.message : '病例详情加载失败');
     } finally {
@@ -240,6 +246,15 @@ function AgentWorkbench() {
       if (current.length >= 4) return current;
       return [...current, encoded];
     });
+  }
+
+  function removePendingImage(index: number) {
+    setImageUrls((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function openPreview(url: string) {
+    setPreviewImage(url);
+    setPreviewScale(1);
   }
 
   async function handleFollowupSubmit(values: {
@@ -395,13 +410,31 @@ function AgentWorkbench() {
                 <div key={item.id} className={`chat-bubble ${item.role}`}>
                   <div className="bubble-role">{item.role === 'user' ? '用户' : 'Agent'}</div>
                   <Paragraph>{item.content}</Paragraph>
-                  {item.imageUrls?.length ? <ImageStrip urls={item.imageUrls} /> : null}
+                  {item.imageUrls?.length ? <ImageStrip urls={item.imageUrls} onPreview={openPreview} /> : null}
                 </div>
               ))}
             </div>
 
             <div className="composer">
+              <Upload
+                accept="image/*"
+                showUploadList={false}
+                multiple
+                beforeUpload={(file) => {
+                  void handleImageSelection(file);
+                  return Upload.LIST_IGNORE;
+                }}
+              >
+                <Button className="attach-button" shape="circle" icon={<PictureOutlined />} aria-label="上传图片" />
+              </Upload>
               <div className="composer-input">
+                {imageUrls.length ? (
+                  <PendingImageStrip
+                    urls={imageUrls}
+                    onPreview={openPreview}
+                    onRemove={removePendingImage}
+                  />
+                ) : null}
                 <TextArea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
@@ -414,31 +447,10 @@ function AgentWorkbench() {
                     }
                   }}
                 />
-                {imageUrls.length ? (
-                  <div className="pending-images">
-                    <ImageStrip urls={imageUrls} />
-                    <Button size="small" onClick={() => setImageUrls([])}>
-                      清空图片
-                    </Button>
-                  </div>
-                ) : null}
               </div>
-              <Space direction="vertical">
-                <Upload
-                  accept="image/*"
-                  showUploadList={false}
-                  multiple
-                  beforeUpload={(file) => {
-                    void handleImageSelection(file);
-                    return Upload.LIST_IGNORE;
-                  }}
-                >
-                  <Button icon={<PictureOutlined />}>图片</Button>
-                </Upload>
-                <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void handleSend()}>
-                  发送
-                </Button>
-              </Space>
+              <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void handleSend()}>
+                发送
+              </Button>
             </div>
           </section>
         </Content>
@@ -460,7 +472,7 @@ function AgentWorkbench() {
                       value={caseDetail.days_to_harvest != null ? `${caseDetail.days_to_harvest} 天` : '-'}
                     />
                     <InfoLine label="复查日期" value={formatDate(caseDetail.followup_date)} />
-                    <ImageEvidence detail={caseDetail} />
+                    <ImageEvidence detail={caseDetail} onPreview={openPreview} />
                     {caseDetail.current_plan?.summary ? (
                       <Alert type="success" showIcon message={caseDetail.current_plan.summary} />
                     ) : null}
@@ -523,6 +535,12 @@ function AgentWorkbench() {
         onCancel={() => setCloseOpen(false)}
         onSubmit={(values) => void handleCloseCase(values)}
       />
+      <ImagePreview
+        imageUrl={previewImage}
+        scale={previewScale}
+        onScaleChange={setPreviewScale}
+        onClose={() => setPreviewImage(null)}
+      />
     </Layout>
   );
 }
@@ -534,6 +552,56 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
+  const messagesFromEvents = detail.events.flatMap((event): ChatMessage[] => {
+    if (event.event_type === 'USER_MESSAGE') {
+      const imageUrls = Array.isArray(event.structured_data.image_urls)
+        ? (event.structured_data.image_urls as string[])
+        : [];
+      return [
+        {
+          id: `event-${event.id}`,
+          role: 'user',
+          content: event.user_input || '',
+          imageUrls,
+        },
+      ];
+    }
+
+    if (event.event_type === 'FOLLOWUP_SUBMITTED') {
+      return [
+        {
+          id: `event-${event.id}`,
+          role: 'user',
+          content: event.user_input || '',
+        },
+      ];
+    }
+
+    if (event.event_type === 'AGENT_RESPONSE') {
+      return [
+        {
+          id: `event-${event.id}`,
+          role: 'agent',
+          content: responseToMessage(event.system_output as unknown as CaseResponse),
+          response: event.system_output as unknown as CaseResponse,
+        },
+      ];
+    }
+
+    return [];
+  });
+
+  if (messagesFromEvents.length) return messagesFromEvents;
+  return [
+    {
+      id: `case-${detail.id}-summary`,
+      role: 'agent',
+      content: '这个病例来自旧版本事件记录，暂无可回放的完整对话。请查看右侧事件时间线。',
+    },
+  ];
 }
 
 function PanelTitle({ icon, text }: { icon: React.ReactNode; text: string }) {
@@ -554,17 +622,55 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function ImageStrip({ urls }: { urls: string[] }) {
+function ImageStrip({ urls, onPreview }: { urls: string[]; onPreview: (url: string) => void }) {
   return (
     <div className="image-strip">
       {urls.map((url, index) => (
-        <img key={`${url.slice(0, 48)}-${index}`} src={url} alt={`病例图片证据 ${index + 1}`} />
+        <button
+          key={`${url.slice(0, 48)}-${index}`}
+          className="image-thumb"
+          type="button"
+          onClick={() => onPreview(url)}
+          aria-label={`查看图片 ${index + 1}`}
+        >
+          <img src={url} alt={`病例图片证据 ${index + 1}`} />
+        </button>
       ))}
     </div>
   );
 }
 
-function ImageEvidence({ detail }: { detail: CaseDetail }) {
+function PendingImageStrip({
+  urls,
+  onPreview,
+  onRemove,
+}: {
+  urls: string[];
+  onPreview: (url: string) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div className="pending-image-strip">
+      {urls.map((url, index) => (
+        <div className="pending-image" key={`${url.slice(0, 48)}-${index}`}>
+          <button className="image-thumb" type="button" onClick={() => onPreview(url)}>
+            <img src={url} alt={`待发送图片 ${index + 1}`} />
+          </button>
+          <Button
+            className="remove-image"
+            size="small"
+            shape="circle"
+            icon={<CloseOutlined />}
+            onClick={() => onRemove(index)}
+            aria-label={`删除图片 ${index + 1}`}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ImageEvidence({ detail, onPreview }: { detail: CaseDetail; onPreview: (url: string) => void }) {
   const imageEvidence = Array.isArray(detail.structured_data.image_evidence)
     ? (detail.structured_data.image_evidence as string[])
     : [];
@@ -577,10 +683,54 @@ function ImageEvidence({ detail }: { detail: CaseDetail }) {
       description={
         <Space direction="vertical" size={8} className="full-width">
           <Text type="secondary">MVP 阶段尚未执行视觉识别，图片只作为 Case Event 和后续多模态工具的证据。</Text>
-          <ImageStrip urls={imageEvidence} />
+          <ImageStrip urls={imageEvidence} onPreview={onPreview} />
         </Space>
       }
     />
+  );
+}
+
+function ImagePreview({
+  imageUrl,
+  scale,
+  onScaleChange,
+  onClose,
+}: {
+  imageUrl: string | null;
+  scale: number;
+  onScaleChange: (scale: number) => void;
+  onClose: () => void;
+}) {
+  if (!imageUrl) return null;
+
+  function zoom(delta: number) {
+    onScaleChange(Math.min(4, Math.max(0.4, Number((scale + delta).toFixed(2)))));
+  }
+
+  return (
+    <div
+      className="image-preview-overlay"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      onWheel={(event) => {
+        event.preventDefault();
+        zoom(event.deltaY > 0 ? -0.12 : 0.12);
+      }}
+    >
+      <div className="image-preview-toolbar" onClick={(event) => event.stopPropagation()}>
+        <Button shape="circle" icon={<PlusOutlined />} onClick={() => zoom(0.2)} aria-label="放大" />
+        <Button shape="circle" icon={<MinusOutlined />} onClick={() => zoom(-0.2)} aria-label="缩小" />
+        <Button shape="circle" icon={<CloseOutlined />} onClick={onClose} aria-label="退出" />
+      </div>
+      <img
+        className="image-preview"
+        src={imageUrl}
+        alt="放大查看"
+        style={{ transform: `scale(${scale})` }}
+        onClick={(event) => event.stopPropagation()}
+      />
+    </div>
   );
 }
 
