@@ -136,6 +136,7 @@ function AgentWorkbench() {
   const [previewScale, setPreviewScale] = useState(1);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
+  const composerStacked = input.split(/\r?\n/).length > 2 || input.length > 48 || imageUrls.length > 0;
   const { nodes, edges } = useMemo(
     () => buildStateMachineElements(activeStatus || null),
     [activeStatus],
@@ -415,8 +416,9 @@ function AgentWorkbench() {
               ))}
             </div>
 
-            <div className="composer">
+            <div className={`composer ${composerStacked ? 'stacked' : ''}`}>
               <Upload
+                className="composer-attach"
                 accept="image/*"
                 showUploadList={false}
                 multiple
@@ -448,7 +450,13 @@ function AgentWorkbench() {
                   }}
                 />
               </div>
-              <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void handleSend()}>
+              <Button
+                className="send-button"
+                type="primary"
+                icon={<SendOutlined />}
+                loading={sending}
+                onClick={() => void handleSend()}
+              >
                 发送
               </Button>
             </div>
@@ -555,7 +563,8 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
-  const messagesFromEvents = detail.events.flatMap((event): ChatMessage[] => {
+  const events = detail.events;
+  const messagesFromEvents = events.flatMap((event, index): ChatMessage[] => {
     if (event.event_type === 'USER_MESSAGE') {
       const imageUrls = Array.isArray(event.structured_data.image_urls)
         ? (event.structured_data.image_urls as string[])
@@ -591,6 +600,65 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
       ];
     }
 
+    if (event.event_type === 'QUESTIONS_ASKED') {
+      const questions = Array.isArray(event.system_output.questions)
+        ? (event.system_output.questions as string[])
+        : [];
+      return [
+        {
+          id: `event-${event.id}`,
+          role: 'agent',
+          content: ['为了避免误判，请先补充几个关键信息。', ...questions.map((item, i) => `${i + 1}. ${item}`)].join(
+            '\n',
+          ),
+        },
+      ];
+    }
+
+    if (event.event_type === 'FOLLOWUP_COMPARED') {
+      return [
+        {
+          id: `event-${event.id}`,
+          role: 'agent',
+          content: `已完成复查比较。趋势：${String(event.system_output.trend || '-')}`,
+        },
+      ];
+    }
+
+    if (
+      event.event_type === 'STATE_CHANGED' &&
+      !events.slice(index + 1).some((later) => later.event_type === 'AGENT_RESPONSE')
+    ) {
+      const status = String(event.system_output.status || '');
+      if (status === 'FOLLOWUP_PENDING') {
+        return [
+          {
+            id: `event-${event.id}`,
+            role: 'agent',
+            content: legacyPlanMessage(detail),
+          },
+        ];
+      }
+      if (status === 'ESCALATED') {
+        return [
+          {
+            id: `event-${event.id}`,
+            role: 'agent',
+            content: '当前情况不适合继续仅凭通用建议处理，建议联系当地农技人员或专业人员确认。',
+          },
+        ];
+      }
+      if (status === 'CLOSED') {
+        return [
+          {
+            id: `event-${event.id}`,
+            role: 'agent',
+            content: '病例已结案。',
+          },
+        ];
+      }
+    }
+
     return [];
   });
 
@@ -602,6 +670,17 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
       content: '这个病例来自旧版本事件记录，暂无可回放的完整对话。请查看右侧事件时间线。',
     },
   ];
+}
+
+function legacyPlanMessage(detail: CaseDetail) {
+  const lines = ['已形成保守的初步判断，并创建复查计划。'];
+  if (detail.suspected_problem || detail.likelihood) {
+    lines.push('', `疑似问题：${detail.suspected_problem || '-'} / ${detail.likelihood || '-'}`);
+  }
+  if (detail.followup_date) {
+    lines.push(`复查日期：${formatDate(detail.followup_date)}`);
+  }
+  return lines.join('\n');
 }
 
 function PanelTitle({ icon, text }: { icon: React.ReactNode; text: string }) {

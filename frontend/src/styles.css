@@ -138,22 +138,57 @@ body {
 }
 
 .composer {
-  padding: 12px;
+  padding: 10px 12px;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: end;
+  gap: 8px;
+  align-items: center;
   border-top: 1px solid #dfe5dc;
 }
 
+.composer.stacked {
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "input input input"
+    "attach spacer send";
+  align-items: center;
+}
+
+.composer.stacked .composer-input {
+  grid-area: input;
+}
+
+.composer.stacked .composer-attach {
+  grid-area: attach;
+}
+
+.composer.stacked .send-button {
+  grid-area: send;
+}
+
 .attach-button {
-  margin-bottom: 5px;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .composer-input {
   display: grid;
   gap: 8px;
   min-width: 0;
+}
+
+.composer-input .ant-input {
+  min-height: 38px;
+  padding: 8px 11px;
+  line-height: 1.45;
+}
+
+.send-button {
+  height: 36px;
+  min-width: 76px;
 }
 
 .pending-image-strip {
