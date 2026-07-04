@@ -16,7 +16,6 @@ import {
   Layout,
   List,
   Modal,
-  Radio,
   Segmented,
   Space,
   Spin,
@@ -35,10 +34,12 @@ import {
   DownloadOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  LockOutlined,
   MinusOutlined,
   PictureOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SendOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -143,7 +144,7 @@ function AgentWorkbench() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewScale, setPreviewScale] = useState(1);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [dueReminders, setDueReminders] = useState<Reminder[]>([]);
   const [remindersOpen, setRemindersOpen] = useState(false);
 
@@ -195,7 +196,7 @@ function AgentWorkbench() {
 
   useEffect(() => {
     if (!getStoredToken()) {
-      setAuthOpen(true);
+      setAuthChecking(false);
       return;
     }
     void me()
@@ -207,7 +208,10 @@ function AgentWorkbench() {
       .then(([, reminders]) => setDueReminders(reminders))
       .catch(() => {
         setStoredToken(null);
-        setAuthOpen(true);
+        setCurrentUser(null);
+      })
+      .finally(() => {
+        setAuthChecking(false);
       });
   }, [refreshCases]);
 
@@ -349,7 +353,6 @@ function AgentWorkbench() {
   async function handleAuthenticated(user: User) {
     setCurrentUser(user);
     setUserId(String(user.id));
-    setAuthOpen(false);
     await refreshCases();
     try {
       setDueReminders(await listDueReminders());
@@ -365,7 +368,27 @@ function AgentWorkbench() {
     setCaseDetail(null);
     setCases([]);
     setDueReminders([]);
-    setAuthOpen(true);
+    setMessages([
+      {
+        id: 'welcome',
+        role: 'agent',
+        content:
+          '直接描述番茄异常，系统会从对话中自动创建病例，并推进诊断、处置和复查。建议先输入发生部位、症状形态、生长阶段、天气和采收时间。',
+      },
+    ]);
+  }
+
+  if (authChecking) {
+    return <AuthLoadingScreen systemStatus={systemStatus} />;
+  }
+
+  if (!currentUser) {
+    return (
+      <LoginPage
+        systemStatus={systemStatus}
+        onAuthenticated={(user) => void handleAuthenticated(user)}
+      />
+    );
   }
 
   return (
@@ -616,11 +639,6 @@ function AgentWorkbench() {
         onScaleChange={setPreviewScale}
         onClose={() => setPreviewImage(null)}
       />
-      <AuthModal
-        open={authOpen}
-        onAuthenticated={(user) => void handleAuthenticated(user)}
-        onCancel={() => setAuthOpen(false)}
-      />
       <ReminderModal
         open={remindersOpen}
         reminders={dueReminders}
@@ -637,6 +655,133 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function AuthLoadingScreen({ systemStatus }: { systemStatus: string }) {
+  return (
+    <div className="login-shell">
+      <Spin size="large" />
+      <Text type="secondary">正在连接 Tomato Case Agent · API {systemStatus}</Text>
+    </div>
+  );
+}
+
+function LoginPage({
+  systemStatus,
+  onAuthenticated,
+}: {
+  systemStatus: string;
+  onAuthenticated: (user: User) => void;
+}) {
+  const [form] = Form.useForm();
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [loading, setLoading] = useState(false);
+
+  async function submit(values: { username: string; password: string }) {
+    setLoading(true);
+    try {
+      const result = mode === 'login' ? await login(values) : await register(values);
+      setStoredToken(result.access_token);
+      message.success(mode === 'login' ? '登录成功' : '注册成功');
+      onAuthenticated(result.user);
+      form.resetFields();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '认证失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-visual">
+        <div className="brand-mark">
+          <span className="brand-symbol">T</span>
+          <div>
+            <Title level={2}>Tomato Case Agent</Title>
+            <Text>番茄病虫害处置闭环管理系统</Text>
+          </div>
+        </div>
+
+        <div className="field-panel">
+          <div className="field-sky" />
+          <div className="field-ridge ridge-one" />
+          <div className="field-ridge ridge-two" />
+          <div className="field-vines">
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="tomato tomato-one" />
+          <div className="tomato tomato-two" />
+          <div className="tomato tomato-three" />
+          <div className="inspection-card">
+            <Tag color="green">Case Agent</Tag>
+            <Text strong>状态、工具、记忆共同推进</Text>
+            <Text type="secondary">图片观察 · 天气信号 · 复查提醒 · 安全约束</Text>
+          </div>
+        </div>
+
+        <div className="login-metrics">
+          <div>
+            <Text type="secondary">运行链路</Text>
+            <strong>Conversation → Case → Follow-up</strong>
+          </div>
+          <div>
+            <Text type="secondary">API</Text>
+            <strong>{systemStatus}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="login-form-wrap">
+        <div className="login-card">
+          <Space direction="vertical" size={20} className="full-width">
+            <Space direction="vertical" size={4}>
+              <Tag icon={<SafetyCertificateOutlined />} color="green">
+                受保护的病例工作台
+              </Tag>
+              <Title level={3}>{mode === 'login' ? '登录账号' : '创建账号'}</Title>
+              <Text type="secondary">登录后只会看到属于你的病例、复查和提醒。</Text>
+            </Space>
+
+            <Segmented
+              block
+              value={mode}
+              onChange={(value) => setMode(value as 'login' | 'register')}
+              options={[
+                { label: '登录', value: 'login' },
+                { label: '注册', value: 'register' },
+              ]}
+            />
+
+            <Form form={form} layout="vertical" onFinish={(values) => void submit(values)}>
+              <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+                <Input
+                  size="large"
+                  prefix={<UserOutlined />}
+                  autoComplete="username"
+                  placeholder="例如 xiaxin"
+                />
+              </Form.Item>
+              <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+                <Input.Password
+                  size="large"
+                  prefix={<LockOutlined />}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  placeholder="请输入密码"
+                />
+              </Form.Item>
+              <Button block size="large" type="primary" htmlType="submit" loading={loading}>
+                {mode === 'login' ? '进入工作台' : '创建并进入'}
+              </Button>
+            </Form>
+          </Space>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
@@ -887,67 +1032,6 @@ function ImagePreview({
         onClick={(event) => event.stopPropagation()}
       />
     </div>
-  );
-}
-
-function AuthModal({
-  open,
-  onAuthenticated,
-  onCancel,
-}: {
-  open: boolean;
-  onAuthenticated: (user: User) => void;
-  onCancel: () => void;
-}) {
-  const [form] = Form.useForm();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [loading, setLoading] = useState(false);
-
-  async function submit(values: { username: string; password: string }) {
-    setLoading(true);
-    try {
-      const result = mode === 'login' ? await login(values) : await register(values);
-      setStoredToken(result.access_token);
-      message.success(mode === 'login' ? '登录成功' : '注册成功');
-      onAuthenticated(result.user);
-      form.resetFields();
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '认证失败');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <Modal
-      title="账户"
-      open={open}
-      onCancel={onCancel}
-      confirmLoading={loading}
-      onOk={() => form.submit()}
-      okText={mode === 'login' ? '登录' : '注册'}
-    >
-      <Space direction="vertical" className="full-width" size={12}>
-        <Radio.Group
-          value={mode}
-          onChange={(event) => setMode(event.target.value)}
-          optionType="button"
-          buttonStyle="solid"
-          options={[
-            { label: '登录', value: 'login' },
-            { label: '注册', value: 'register' },
-          ]}
-        />
-        <Form form={form} layout="vertical" onFinish={(values) => void submit(values)}>
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input autoComplete="username" placeholder="例如 xiaxin" />
-          </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
-          </Form.Item>
-        </Form>
-      </Space>
-    </Modal>
   );
 }
 
