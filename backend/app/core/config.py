@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     openai_text_model: str = "gpt-4.1-mini"
     openai_vision_model: str = "gpt-4.1-mini"
     weather_api_key: str | None = None
+    cors_origins: str = (
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:8000,http://127.0.0.1:8000"
+    )
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 

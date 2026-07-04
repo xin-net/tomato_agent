@@ -9,6 +9,7 @@ import type {
 } from './types';
 
 const TOKEN_KEY = 'tomatoAgentAccessToken';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -21,14 +22,21 @@ export function setStoredToken(token: string | null) {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const token = getStoredToken();
-  const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-    ...options,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${url}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options?.headers,
+      },
+      ...options,
+    });
+  } catch (error) {
+    throw new Error(
+      `无法连接后端服务。请确认 FastAPI 已启动，并检查前端 API 地址 ${API_BASE_URL || '/api proxy'}。`,
+    );
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -118,7 +126,7 @@ export function closeCase(caseId: number, summary?: string) {
 
 export async function downloadCaseReport(caseId: number) {
   const token = getStoredToken();
-  const response = await fetch(`/api/cases/${caseId}/report`, {
+  const response = await fetch(`${API_BASE_URL}/api/cases/${caseId}/report`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {

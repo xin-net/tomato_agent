@@ -1,11 +1,13 @@
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.core.database import Base, engine, get_db
 from app.core.security import create_access_token, verify_password
 from app.domain.models import User
@@ -29,6 +31,14 @@ from app.services.case_orchestrator import CaseOrchestrator
 from app.services.conversation_service import ConversationService
 
 app = FastAPI(title="Tomato Case Agent", version="0.1.0")
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

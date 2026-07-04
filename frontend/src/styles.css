@@ -64,24 +64,70 @@ body {
 }
 
 .login-page {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(560px, 1.15fr) minmax(480px, 0.85fr);
-  background: #f5f7f2;
-}
-
-.login-visual {
   position: relative;
   min-height: 100vh;
-  padding: 46px 52px;
+  display: grid;
+  grid-template-columns: minmax(560px, 1fr) minmax(460px, 0.72fr);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 78% 18%, rgba(255, 255, 255, 0.2), transparent 34%),
+    #0c1810;
+}
+
+.login-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(7, 18, 11, 0.76) 0%, rgba(10, 24, 14, 0.48) 45%, rgba(248, 250, 246, 0.92) 70%, #ffffff 100%),
+    url("./assets/tomato-greenhouse-login.webp") center / cover no-repeat;
+  transform: scale(1.03);
+  animation: heroDrift 22s ease-in-out infinite alternate;
+}
+
+.login-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(115deg, transparent 24%, rgba(255, 255, 255, 0.18) 35%, transparent 46%),
+    radial-gradient(circle at 25% 30%, rgba(247, 96, 68, 0.2), transparent 26%);
+  mix-blend-mode: screen;
+  animation: lightSweep 9s ease-in-out infinite;
+}
+
+.login-ambient {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  border-radius: 999px;
+  filter: blur(52px);
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.ambient-one {
+  left: 8%;
+  bottom: 9%;
+  background: rgba(57, 128, 72, 0.8);
+  animation: floatSlow 8s ease-in-out infinite;
+}
+
+.ambient-two {
+  right: 30%;
+  top: 8%;
+  background: rgba(218, 78, 52, 0.48);
+  animation: floatSlow 10s ease-in-out infinite reverse;
+}
+
+.login-story {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  padding: 50px 56px;
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 28px;
-  overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(245, 247, 242, 0.78)),
-    #edf4ea;
-  border-right: 1px solid #dfe5dc;
+  color: #ffffff;
 }
 
 .brand-mark {
@@ -90,14 +136,26 @@ body {
   gap: 14px;
 }
 
+.login-story .ant-typography,
+.login-story h2,
+.login-story h1 {
+  color: #ffffff;
+}
+
+.login-story .ant-typography-secondary {
+  color: rgba(255, 255, 255, 0.78) !important;
+}
+
 .brand-symbol {
   width: 48px;
   height: 48px;
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
-  background: #2f7d4a;
+  background: rgba(255, 255, 255, 0.16);
   color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(12px);
   font-size: 26px;
   font-weight: 800;
 }
@@ -107,129 +165,136 @@ body {
   margin: 0;
 }
 
-.field-panel {
-  position: relative;
-  min-height: 420px;
+.hero-copy {
   align-self: center;
-  overflow: hidden;
-  border: 1px solid #d4dfd2;
-  border-radius: 8px;
-  background: #dcebd8;
-  box-shadow: 0 22px 60px rgba(34, 72, 46, 0.14);
-}
-
-.field-sky {
-  position: absolute;
-  inset: 0 0 42%;
-  background:
-    linear-gradient(180deg, rgba(214, 233, 241, 0.95), rgba(235, 244, 225, 0.75)),
-    #d6e9f1;
-}
-
-.field-ridge {
-  position: absolute;
-  left: -8%;
-  right: -8%;
-  height: 46%;
-  bottom: -12%;
-  border-radius: 50% 50% 0 0;
-  transform: rotate(-3deg);
-}
-
-.ridge-one {
-  background: #7da365;
-}
-
-.ridge-two {
-  bottom: -21%;
-  transform: rotate(5deg);
-  background: #436b46;
-}
-
-.field-vines {
-  position: absolute;
-  inset: 70px 64px 88px;
+  max-width: 650px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 26px;
-  align-items: end;
+  gap: 16px;
+  justify-items: start;
 }
 
-.field-vines span {
-  height: 250px;
-  border-left: 3px solid #2f6a3a;
-  border-right: 1px solid rgba(47, 106, 58, 0.45);
-  transform: skewX(-5deg);
+.hero-copy h1 {
+  margin: 0;
+  max-width: 640px;
+  font-size: 48px;
+  line-height: 1.08;
+  letter-spacing: 0;
 }
 
-.tomato {
-  position: absolute;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #d94b3d;
-  border: 3px solid #b93b30;
-  box-shadow: inset -5px -6px 0 rgba(122, 23, 21, 0.16);
+.hero-copy .ant-typography {
+  max-width: 560px;
+  font-size: 16px;
+  line-height: 1.75;
 }
 
-.tomato-one {
-  left: 30%;
-  top: 43%;
-}
-
-.tomato-two {
-  left: 55%;
-  top: 35%;
-}
-
-.tomato-three {
-  left: 70%;
-  top: 51%;
-}
-
-.inspection-card {
-  position: absolute;
-  right: 28px;
-  bottom: 26px;
-  width: 260px;
-  padding: 14px;
+.floating-insights {
   display: grid;
-  gap: 8px;
-  border: 1px solid #dfe5dc;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 16px 40px rgba(22, 40, 28, 0.16);
-}
-
-.login-metrics {
-  display: grid;
-  grid-template-columns: 1fr 120px;
+  grid-template-columns: 1.35fr 0.7fr;
   gap: 14px;
+  align-items: stretch;
 }
 
-.login-metrics > div {
-  padding: 14px 16px;
-  display: grid;
-  gap: 4px;
-  border: 1px solid #dfe5dc;
+.insight-card {
+  min-height: 72px;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.13);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(18px);
+  animation: cardLift 7s ease-in-out infinite;
+}
+
+.insight-card.primary {
+  grid-column: span 2;
+}
+
+.insight-card.pulse {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  font-weight: 700;
+  animation-delay: -2s;
+}
+
+.insight-card strong {
+  color: #ffffff;
 }
 
 .login-form-wrap {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
-  padding: 42px;
+  padding: 54px;
   display: grid;
   place-items: center;
-  background: #ffffff;
 }
 
 .login-card {
-  width: min(420px, 100%);
+  width: min(430px, 100%);
+  padding: 34px;
+  border: 1px solid rgba(216, 226, 212, 0.75);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 30px 90px rgba(20, 38, 24, 0.18);
+  backdrop-filter: blur(20px);
 }
 
 .login-card .ant-form-item {
   margin-bottom: 16px;
+}
+
+.social-login-row {
+  width: 100%;
+}
+
+.social-login-row .ant-space-item {
+  flex: 1;
+}
+
+@keyframes heroDrift {
+  from {
+    transform: scale(1.03) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.08) translate3d(-12px, 8px, 0);
+  }
+}
+
+@keyframes lightSweep {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: translateX(-8%);
+  }
+  50% {
+    opacity: 0.55;
+    transform: translateX(8%);
+  }
+}
+
+@keyframes floatSlow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(16px, -18px, 0);
+  }
+}
+
+@keyframes cardLift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
 }
 
 .case-list {

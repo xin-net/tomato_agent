@@ -33,6 +33,8 @@ import {
   CloseOutlined,
   DownloadOutlined,
   FileTextOutlined,
+  GithubOutlined,
+  GoogleOutlined,
   HistoryOutlined,
   LockOutlined,
   MinusOutlined,
@@ -692,9 +694,17 @@ function LoginPage({
     }
   }
 
+  function handleSocialLogin(provider: 'Google' | 'GitHub') {
+    message.info(`${provider} 登录需要先配置 OAuth Client ID、Client Secret 和回调地址。`);
+  }
+
   return (
     <main className="login-page">
-      <section className="login-visual">
+      <div className="login-backdrop" />
+      <div className="login-ambient ambient-one" />
+      <div className="login-ambient ambient-two" />
+
+      <section className="login-story">
         <div className="brand-mark">
           <span className="brand-symbol">T</span>
           <div>
@@ -703,34 +713,26 @@ function LoginPage({
           </div>
         </div>
 
-        <div className="field-panel">
-          <div className="field-sky" />
-          <div className="field-ridge ridge-one" />
-          <div className="field-ridge ridge-two" />
-          <div className="field-vines">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="tomato tomato-one" />
-          <div className="tomato tomato-two" />
-          <div className="tomato tomato-three" />
-          <div className="inspection-card">
-            <Tag color="green">Case Agent</Tag>
-            <Text strong>状态、工具、记忆共同推进</Text>
-            <Text type="secondary">图片观察 · 天气信号 · 复查提醒 · 安全约束</Text>
-          </div>
+        <div className="hero-copy">
+          <Tag color="green">Agentic crop care</Tag>
+          <Title>把一次咨询，推进成可复查的处置闭环</Title>
+          <Text>
+            图片、天气、病例状态和复查提醒会进入同一条事件记忆，Agent 只在安全约束内推进下一步。
+          </Text>
         </div>
 
-        <div className="login-metrics">
-          <div>
-            <Text type="secondary">运行链路</Text>
-            <strong>Conversation → Case → Follow-up</strong>
+        <div className="floating-insights">
+          <div className="insight-card primary">
+            <Text type="secondary">当前链路</Text>
+            <strong>Conversation → Case → Tool → Follow-up</strong>
           </div>
-          <div>
-            <Text type="secondary">API</Text>
-            <strong>{systemStatus}</strong>
+          <div className="insight-card pulse">
+            <Badge status={systemStatus === 'ok' ? 'success' : 'warning'} />
+            <span>API {systemStatus}</span>
+          </div>
+          <div className="insight-card">
+            <Text type="secondary">工具观察</Text>
+            <strong>图片识别 · 天气信号 · 复查提醒</strong>
           </div>
         </div>
       </section>
@@ -745,6 +747,26 @@ function LoginPage({
               <Title level={3}>{mode === 'login' ? '登录账号' : '创建账号'}</Title>
               <Text type="secondary">登录后只会看到属于你的病例、复查和提醒。</Text>
             </Space>
+
+            {systemStatus === 'offline' ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="后端服务未连接"
+                description="请先启动 FastAPI 后端，或检查 VITE_API_BASE_URL / Vite 代理配置。"
+              />
+            ) : null}
+
+            <Space className="social-login-row" size={10}>
+              <Button block icon={<GoogleOutlined />} onClick={() => handleSocialLogin('Google')}>
+                Google
+              </Button>
+              <Button block icon={<GithubOutlined />} onClick={() => handleSocialLogin('GitHub')}>
+                GitHub
+              </Button>
+            </Space>
+
+            <Divider plain>或使用账号密码</Divider>
 
             <Segmented
               block
@@ -773,7 +795,14 @@ function LoginPage({
                   placeholder="请输入密码"
                 />
               </Form.Item>
-              <Button block size="large" type="primary" htmlType="submit" loading={loading}>
+              <Button
+                block
+                size="large"
+                type="primary"
+                htmlType="submit"
+                loading={loading}
+                disabled={systemStatus === 'offline'}
+              >
                 {mode === 'login' ? '进入工作台' : '创建并进入'}
               </Button>
             </Form>

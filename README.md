@@ -61,6 +61,19 @@ http://127.0.0.1:5174/
 
 开发模式下，Vite 会代理 `/api` 到 FastAPI。
 
+如果注册或登录时提示“无法连接后端服务”，通常是 FastAPI 没有启动，或前端访问地址没有走 Vite 代理。请先确认：
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8000/health
+```
+
+如果需要手动指定前端端口，Vite 8 参数使用等号形式：
+
+```powershell
+cd frontend
+npm run dev -- --host=127.0.0.1 --port=5174
+```
+
 ## 集成模式
 
 构建前端：
@@ -132,4 +145,5 @@ alembic upgrade head
 - 视觉工具已接入 OpenAI SDK 边界，但真实图片识别需要配置 `OPENAI_API_KEY` 后再进一步调试提示词和结构化输出。
 - 天气工具当前优先解析用户描述，真实天气 API 适配器预留在 `WEATHER_API_KEY` 后续接入。
 - 日历提醒当前是系统内部提醒；Google/Outlook/系统通知属于后续外部 Tool Adapter。
+- Google/GitHub 登录入口已在前端预留；真正启用需要先创建对应 OAuth App，并配置 Client ID、Client Secret 和回调地址。
 - 知识库仍是人工整理 Markdown，Word/PDF RAG 暂未实现。

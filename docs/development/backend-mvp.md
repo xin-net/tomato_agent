@@ -37,6 +37,9 @@ postgresql+psycopg://xiaxin:123456@127.0.0.1:5432/tomato_agent
 - `OPENAI_TEXT_MODEL`：文本模型默认值。
 - `OPENAI_VISION_MODEL`：视觉模型默认值。
 - `WEATHER_API_KEY`：后续启用真实天气 API。
+- `CORS_ORIGINS`：允许访问后端的前端来源，开发模式默认包含 `5174` 和 `8000`。
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`：Google OAuth 后续接入凭据。
+- `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`：GitHub OAuth 后续接入凭据。
 
 ## 数据库迁移
 
@@ -108,6 +111,12 @@ uvicorn app.main:app --reload
 cd frontend
 npm install
 npm run dev
+```
+
+如果需要指定端口，Vite 8 使用等号形式：
+
+```powershell
+npm run dev -- --host=127.0.0.1 --port=5174
 ```
 
 访问：
