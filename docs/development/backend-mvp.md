@@ -1,22 +1,23 @@
-# Backend MVP Development Notes
+# 后端 MVP 开发说明
 
-当前后端 MVP 使用：
+## 当前架构
 
-- Python + FastAPI
-- PostgreSQL via SQLAlchemy + psycopg
-- Pydantic schemas
-- Markdown Knowledge Memory
-- 规则版 `AgentDecisionEngine`
+后端采用 FastAPI + SQLAlchemy + PostgreSQL。核心运行时不是简单 CRUD，而是：
 
-当前前端工作台使用：
+`ConversationService -> CaseOrchestrator -> AgentDecisionEngine -> Tools -> StateMachine/SafetyChecker -> Memory`
 
-- Vite + React + TypeScript
-- Ant Design 业务组件
-- React Flow 状态机可视化
+其中：
 
-## 运行前准备
+- `CaseOrchestrator`：病例编排器，负责把用户输入、工具观察、状态机、事件记忆和复查任务串起来。
+- `AgentDecisionEngine`：当前为规则版决策器，输出下一步动作。
+- `Tools`：症状抽取、知识检索、诊断/方案、复查比较、视觉观察、天气观察、内部提醒。
+- `Memory`：PostgreSQL 中的 Case、CaseEvent、Followup、Reminder，以及结构化 JSON 字段。
+- `StateMachine`：控制病例状态流转。
+- `SafetyChecker`：处置建议前的安全约束。
 
-复制环境变量：
+## 环境变量
+
+复制示例：
 
 ```powershell
 Copy-Item backend/.env.example backend/.env
@@ -28,12 +29,25 @@ Copy-Item backend/.env.example backend/.env
 postgresql+psycopg://xiaxin:123456@127.0.0.1:5432/tomato_agent
 ```
 
-当前本地开发环境使用 Docker 容器 `tomato-agent-postgres`。如果需要手动创建数据库，使用：
+关键配置：
 
-```sql
-CREATE USER xiaxin WITH PASSWORD '123456';
-CREATE DATABASE tomato_agent;
+- `DATABASE_URL`：数据库连接。
+- `JWT_SECRET_KEY`：JWT 签名密钥，正式环境必须替换为随机强密钥。
+- `OPENAI_API_KEY`：后续启用真实 LLM/视觉工具。
+- `OPENAI_TEXT_MODEL`：文本模型默认值。
+- `OPENAI_VISION_MODEL`：视觉模型默认值。
+- `WEATHER_API_KEY`：后续启用真实天气 API。
+
+## 数据库迁移
+
+项目已接入 Alembic。首次建库或结构变化后运行：
+
+```powershell
+cd backend
+alembic upgrade head
 ```
+
+开发期 `app.main` 仍保留 `Base.metadata.create_all`，用于降低本地启动门槛；正式演进应以迁移文件为准。
 
 ## 启动后端
 
@@ -45,23 +59,50 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-服务启动后：
+或使用根目录脚本：
 
-```text
-GET http://127.0.0.1:8000/
-GET http://127.0.0.1:8000/health
-GET http://127.0.0.1:8000/api/system/status
-POST http://127.0.0.1:8000/api/cases
-POST http://127.0.0.1:8000/api/conversation/messages
-GET http://127.0.0.1:8000/api/cases/{case_id}/events
-GET http://127.0.0.1:8000/api/cases/{case_id}/report
+```powershell
+.\scripts\dev-backend.ps1
 ```
 
-`/` 会优先返回 `frontend/dist` 中的 React 工作台；如果前端尚未构建，则回退到后端内置的最小聊天调试界面。
+## 主要接口
 
-## 启动前端工作台
+公开接口：
 
-开发模式：
+- `GET /health`
+- `GET /api/system/status`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+
+需要 JWT：
+
+- `GET /api/auth/me`
+- `POST /api/conversation/messages`
+- `GET /api/cases`
+- `GET /api/cases/{case_id}`
+- `GET /api/cases/{case_id}/events`
+- `GET /api/cases/{case_id}/report`
+- `POST /api/cases/{case_id}/followup`
+- `POST /api/cases/{case_id}/close`
+- `GET /api/reminders`
+- `GET /api/reminders/due`
+- `POST /api/reminders`
+- `PATCH /api/reminders/{reminder_id}`
+
+普通用户只能访问自己的病例；`admin` 角色预留跨用户查看能力。
+
+## 工具状态
+
+- `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API；未配置时返回结构化降级观察。
+- `WeatherTool`：当前解析用户描述中的连续阴雨、高湿、闷棚等信号；真实天气 API 后续接入。
+- `OpenAIAdapter`：文本模型适配器已具备真实调用边界，当前主决策仍使用规则版。
+- `ReminderRepository`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒。
+
+工具输出必须写入 Case/Event Memory，再由编排器继续推进，不能绕过状态机和安全检查直接生成最终处置。
+
+## 前端工作台
+
+前端使用 Vite + React + TypeScript + Ant Design + React Flow。开发模式：
 
 ```powershell
 cd frontend
@@ -69,7 +110,7 @@ npm install
 npm run dev
 ```
 
-默认地址：
+访问：
 
 ```text
 http://127.0.0.1:5174/
@@ -84,56 +125,9 @@ cd ../backend
 uvicorn app.main:app --reload
 ```
 
-构建完成后，后端 `GET /` 会直接服务 React 工作台。
+构建完成后，`GET /` 会由 FastAPI 直接服务 React 工作台。
 
-## 工作台功能
-
-React 工作台包含：
-
-- 左侧病例列表：查看活跃、已结案和全部 Case。
-- 中央聊天：用户只需要输入自然语言，系统会通过 Conversation 入口自动创建或续接 Case。
-- 图片证据：聊天区可以选择图片，MVP 阶段会把图片保存为 Case/Event 的证据，但不会执行视觉诊断。
-- 右侧当前病例：展示疑似问题、可信度、发生部位、复查日期和当前处置方案。
-- 状态机观察：使用 React Flow 展示完整 Case Status 流程，并高亮当前状态和可达下一状态。
-- 复查与事件记忆：展示 Follow-up 摘要和最近 Case Event 时间线。
-- 复查提交：把用户复查描述和结构化变化信号提交给后端比较。
-- 结案：用户确认后通过状态机进入 `CLOSED`。
-- 报告导出：导出 Markdown 病例报告，用于人工确认或验收。
-- 对话回放：切换病例时，前端会从 `USER_MESSAGE`、`FOLLOWUP_SUBMITTED` 和 `AGENT_RESPONSE` 事件恢复聊天记录。
-
-调试界面右侧包含“状态机观察”面板，会展示 MVP 的 Case Status 流程，并高亮当前病例状态。这个面板只用于开发测试阶段观察状态流转，不代表最终产品 UI。
-
-工作台会为当前浏览器会话生成独立测试用户，避免续接历史数据库中的活跃病例。点击“新会话”后，下一条消息会重新自动创建 Case，便于从头观察状态流转。
-
-## 当前实现范围
-
-已实现：
-
-- Conversation 输入自动创建 Case。
-- `/api/conversation/messages` 聊天入口。
-- React 工作台。
-- 状态机观察面板，用于测试阶段查看 Case Status 流转和下一状态。
-- Case、Case Event、Follow-up 持久化模型。
-- 规则版 `AgentDecisionEngine`。
-- `StateMachine` 状态流转约束。
-- `SafetyChecker` 安全检查。
-- Markdown Knowledge Memory。
-- 规则版诊断、处置方案和复查比较。
-- 复查提交时先进入 `FOLLOWUP_REVIEW`，再根据趋势进入好转、继续观察、待补充或升级。
-- 图片 Evidence Memory：`image_urls` 会写入 `structured_data.image_evidence`，并追加 `IMAGE_EVIDENCE_ADDED` 事件。
-- 文本结构化增强：规则抽取会尽量识别生长阶段、近期天气、种植环境、距离采收天数、近期施肥和近期用药。
-- 系统状态 API 和 Markdown 病例报告导出。
-- Agent 用户可见回复会写入 `AGENT_RESPONSE` 事件，用于对话回放和审计。
-
-暂未实现：
-
-- LLM 接入。
-- 图片多模态识别。
-- 日历/提醒同步。
-- Word/PDF 知识导入。
-- 用户登录和真实多用户权限。
-
-## 当前验证命令
+## 验证
 
 ```powershell
 .\scripts\verify.ps1
@@ -147,8 +141,8 @@ python -m pytest -q
 ```
 
 ```powershell
-cd ..\frontend
+cd frontend
 npm run build
 ```
 
-说明：前端生产构建目前会提示 bundle 超过 500 kB，主要来自 Ant Design 和 React Flow。MVP 阶段先接受该结果，后续可以通过路由级动态导入和更细的图组件拆分优化。
+说明：前端生产构建目前会提示 bundle 超过 500 kB，主要来自 Ant Design 和 React Flow。MVP 阶段先接受，后续再做代码分割。

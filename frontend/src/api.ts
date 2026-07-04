@@ -3,12 +3,28 @@ import type {
   CaseListItem,
   ConversationMessageResponse,
   FollowupTrend,
+  AuthResponse,
+  Reminder,
+  User,
 } from './types';
 
+const TOKEN_KEY = 'tomatoAgentAccessToken';
+
+export function getStoredToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setStoredToken(token: string | null) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = getStoredToken();
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
     ...options,
@@ -20,6 +36,24 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export function register(input: { username: string; password: string }) {
+  return request<AuthResponse>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function login(input: { username: string; password: string }) {
+  return request<AuthResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function me() {
+  return request<User>('/api/auth/me');
 }
 
 export function listCases(status?: string) {
@@ -83,7 +117,10 @@ export function closeCase(caseId: number, summary?: string) {
 }
 
 export async function downloadCaseReport(caseId: number) {
-  const response = await fetch(`/api/cases/${caseId}/report`);
+  const token = getStoredToken();
+  const response = await fetch(`/api/cases/${caseId}/report`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!response.ok) {
     throw new Error(await response.text());
   }
@@ -94,4 +131,13 @@ export async function downloadCaseReport(caseId: number) {
   anchor.download = `tomato-case-${caseId}.md`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+export function listReminders(status?: string) {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  return request<Reminder[]>(`/api/reminders${query}`);
+}
+
+export function listDueReminders() {
+  return request<Reminder[]>('/api/reminders/due');
 }

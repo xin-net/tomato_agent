@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,7 @@ from app.domain.state_machine import StateMachine
 from app.repositories.case_repository import CaseRepository
 from app.repositories.event_repository import EventRepository
 from app.repositories.followup_repository import FollowupRepository
+from app.repositories.reminder_repository import ReminderRepository
 from app.schemas.agent import AgentDecisionContext
 from app.schemas.cases import (
     AgentDecisionRead,
@@ -22,10 +23,13 @@ from app.schemas.cases import (
     ReplyInput,
     SafetyResultRead,
 )
+from app.schemas.reminders import ReminderCreate
 from app.tools.diagnosis_tool import DiagnosisTool, PlanTool
 from app.tools.followup_compare_tool import FollowupCompareTool
 from app.tools.knowledge_search_tool import KnowledgeSearchTool
 from app.tools.symptom_extraction_tool import SymptomExtractionTool
+from app.tools.vision_tool import VisionTool
+from app.tools.weather_tool import WeatherTool
 
 
 class CaseOrchestrator:
@@ -34,12 +38,15 @@ class CaseOrchestrator:
         self.cases = CaseRepository(db)
         self.events = EventRepository(db)
         self.followups = FollowupRepository(db)
+        self.reminders = ReminderRepository(db)
         self.extractor = SymptomExtractionTool()
         self.decision_engine = AgentDecisionEngine()
         self.knowledge = KnowledgeSearchTool()
         self.diagnosis_tool = DiagnosisTool()
         self.plan_tool = PlanTool()
         self.followup_compare = FollowupCompareTool()
+        self.vision_tool = VisionTool()
+        self.weather_tool = WeatherTool()
         self.state_machine = StateMachine()
         self.safety = SafetyChecker()
 
@@ -49,6 +56,7 @@ class CaseOrchestrator:
         self.events.append(case.id, EventType.CASE_CREATED, user_input=data.symptoms)
         self._append_user_message(case.id, data.symptoms, data.image_urls)
         self._append_image_evidence(case, data.image_urls)
+        self._observe_weather(case, data.symptoms)
 
         response = self._handle_message(case, data.symptoms)
         self._append_agent_response(case.id, response)
@@ -60,6 +68,7 @@ class CaseOrchestrator:
         case.symptoms = f"{case.symptoms}\n{data.message}".strip()
         self._append_user_message(case.id, data.message, data.image_urls)
         self._append_image_evidence(case, data.image_urls)
+        self._observe_weather(case, data.message)
         response = self._handle_message(case, data.message)
         self._append_agent_response(case.id, response)
         self.db.commit()
@@ -92,6 +101,12 @@ class CaseOrchestrator:
 
         if active:
             self.followups.submit(active, data.description, trend.value)
+            self.reminders.cancel_for_followup(active.id)
+            self.events.append(
+                case.id,
+                EventType.REMINDER_CANCELLED,
+                system_output={"followup_id": active.id, "reason": "用户已提交复查"},
+            )
 
         system_output = {"trend": trend.value, "evidence": evidence}
         self.events.append(case.id, EventType.FOLLOWUP_COMPARED, system_output=system_output)
@@ -151,6 +166,10 @@ class CaseOrchestrator:
             case.structured_data["image_analysis_status"] = existing_structured.get(
                 "image_analysis_status", "pending_vision_tool"
             )
+            if existing_structured.get("vision_observation"):
+                case.structured_data["vision_observation"] = existing_structured["vision_observation"]
+        if existing_structured.get("weather_observation"):
+            case.structured_data["weather_observation"] = existing_structured["weather_observation"]
         self._merge_extracted_fields(case, structured.raw)
         if structured.severity and not case.severity:
             case.severity = structured.severity
@@ -247,11 +266,29 @@ class CaseOrchestrator:
         if plan.followup_after_days:
             due_date = date.today() + timedelta(days=plan.followup_after_days)
             followup = self.followups.create(case.id, due_date, plan.observation_points)
+            self.reminders.create(
+                ReminderCreate(
+                    case_id=case.id,
+                    followup_id=followup.id,
+                    due_at=datetime.combine(due_date, time(hour=9)),
+                    channel="in_app",
+                    reason="处置方案创建的复查提醒",
+                )
+            )
             case.followup_date = due_date
             self.events.append(
                 case.id,
                 EventType.FOLLOWUP_CREATED,
                 system_output={"followup_id": followup.id, "due_date": due_date.isoformat()},
+            )
+            self.events.append(
+                case.id,
+                EventType.REMINDER_CREATED,
+                system_output={
+                    "followup_id": followup.id,
+                    "due_at": datetime.combine(due_date, time(hour=9)).isoformat(),
+                    "channel": "in_app",
+                },
             )
 
         transition = self.state_machine.apply(case, CaseStatus.FOLLOWUP_PENDING, decision.reason)
@@ -307,18 +344,52 @@ class CaseOrchestrator:
                 evidence.append(image_url)
 
         current["image_evidence"] = evidence
-        current["image_analysis_status"] = "pending_vision_tool"
+        vision = self.vision_tool.analyze(image_urls, context=case.symptoms)
+        current["image_analysis_status"] = "analyzed" if vision.is_configured else "not_configured"
+        current["vision_observation"] = vision.model_dump()
         case.structured_data = current
         self.events.append(
             case.id,
             EventType.IMAGE_EVIDENCE_ADDED,
             system_output={
                 "image_count": len(image_urls),
-                "analysis_status": "pending_vision_tool",
-                "note": "MVP 仅保存图片证据，尚未执行视觉识别。",
+                "analysis_status": current["image_analysis_status"],
+                "note": "图片已作为工具观察进入 Case Memory；最终判断仍由编排器、安全检查和状态机约束。",
             },
             structured_data={"image_urls": image_urls},
         )
+        self.events.append(
+            case.id,
+            EventType.VISION_ANALYZED,
+            system_output=vision.model_dump(),
+            structured_data={"image_urls": image_urls},
+        )
+
+    def _observe_weather(self, case, message: str) -> None:
+        location = self._extract_location(case, message)
+        observation = self.weather_tool.observe(location=location, user_description=message)
+        if not observation.risk_signals and not observation.is_configured:
+            return
+
+        current = dict(case.structured_data or {})
+        current["weather_observation"] = observation.model_dump()
+        case.structured_data = current
+        if observation.risk_signals and not case.recent_weather:
+            case.recent_weather = "；".join(observation.risk_signals)
+        self.events.append(
+            case.id,
+            EventType.WEATHER_OBSERVED,
+            system_output=observation.model_dump(),
+        )
+
+    def _extract_location(self, case, message: str) -> str:
+        if case.environment:
+            return case.environment
+        if "大棚" in message or "棚" in message:
+            return "用户描述的大棚环境"
+        if "露天" in message or "露地" in message:
+            return "用户描述的露地环境"
+        return "用户未提供地点"
 
     def _append_user_message(self, case_id: int, message: str, image_urls: list[str]) -> None:
         self.events.append(

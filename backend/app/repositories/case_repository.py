@@ -29,21 +29,32 @@ class CaseRepository:
         self.db.flush()
         return case
 
-    def get(self, case_id: int) -> Case | None:
-        return self.db.get(Case, case_id)
+    def get(self, case_id: int, user_id: str | None = None, include_all: bool = False) -> Case | None:
+        stmt = select(Case).where(Case.id == case_id)
+        if user_id is not None and not include_all:
+            stmt = stmt.where(Case.user_id == user_id)
+        return self.db.scalar(stmt)
 
-    def get_detail(self, case_id: int) -> Case | None:
+    def get_detail(
+        self, case_id: int, user_id: str | None = None, include_all: bool = False
+    ) -> Case | None:
         stmt = (
             select(Case)
             .options(selectinload(Case.events), selectinload(Case.followups))
             .where(Case.id == case_id)
         )
+        if user_id is not None and not include_all:
+            stmt = stmt.where(Case.user_id == user_id)
         return self.db.scalar(stmt)
 
-    def list(self, status: str | None = None) -> list[Case]:
+    def list(
+        self, status: str | None = None, user_id: str | None = None, include_all: bool = False
+    ) -> list[Case]:
         stmt = select(Case).order_by(Case.updated_at.desc())
         if status:
             stmt = stmt.where(Case.status == status)
+        if user_id is not None and not include_all:
+            stmt = stmt.where(Case.user_id == user_id)
         return list(self.db.scalars(stmt))
 
     def latest_active_for_user(self, user_id: str) -> Case | None:

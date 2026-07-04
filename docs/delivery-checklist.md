@@ -124,16 +124,22 @@
 - 点击“结案”后状态进入 `CLOSED`。
 - 已结案 Case 不再作为默认活跃 Case 续接。
 
+## 已进入当前 MVP
+
+- Auth：用户注册、登录、JWT 鉴权和普通用户病例隔离。
+- VisionTool：已接入工具边界和事件记忆；未配置 OpenAI Key 时结构化降级。
+- WeatherTool：已解析用户描述中的天气/湿度风险信号。
+- ReminderTool：已支持系统内复查提醒创建、到期查询和复查后取消。
+- Production migrations：已接入 Alembic 初始迁移。
+
 ## 未完成但已预留
 
-- VisionTool：图片识别叶片、虫体、果实异常。
+- VisionTool 增强：真实图片识别叶片、虫体、果实异常，并输出稳定结构化 JSON。
 - KnowledgeImportTool：Word/PDF/网页导入知识。
 - RAG/混合检索：结构化条目 + BM25/向量检索。
-- ReminderTool：日历、提醒、待办同步。
+- Calendar/Notification Adapter：日历、系统提醒、待办同步。
 - User Profile：跨病例用户画像。
 - RegionPolicy：地区、登记标签、安全间隔期约束。
-- Auth：用户登录和权限隔离。
-- Production migrations：Alembic 或其他迁移工具。
 
 ## 交付判断
 

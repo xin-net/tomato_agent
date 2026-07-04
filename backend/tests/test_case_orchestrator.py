@@ -1,4 +1,5 @@
-from app.domain.enums import CaseStatus
+from app.domain.enums import CaseStatus, EventType
+from app.domain.models import Reminder
 from app.schemas.cases import CreateCaseInput, FollowupInput
 from app.services.case_orchestrator import CaseOrchestrator
 
@@ -36,6 +37,8 @@ def test_create_case_diagnoses_and_creates_followup_when_info_is_enough(db_sessi
     assert detail.growth_stage == "结果期"
     assert detail.recent_weather == "连续阴雨"
     assert detail.days_to_harvest == 10
+    assert db_session.query(Reminder).filter_by(case_id=response.case_id, status="pending").count() == 1
+    assert any(event.event_type == EventType.WEATHER_OBSERVED for event in detail.events)
 
 
 def test_followup_worsening_escalates_case(db_session):
@@ -85,6 +88,7 @@ def test_followup_improving_moves_to_improving(db_session):
 
     assert response.status == CaseStatus.IMPROVING
     assert response.trend is not None
+    assert db_session.query(Reminder).filter_by(case_id=created.case_id, status="cancelled").count() == 1
 
 
 def test_near_harvest_blocks_chemical_details(db_session):
@@ -100,3 +104,20 @@ def test_near_harvest_blocks_chemical_details(db_session):
     assert response.safety is not None
     assert response.safety.chemical_detail_allowed is False
     assert any("采收" in warning for warning in response.safety.warnings)
+
+
+def test_image_evidence_runs_vision_tool_observation(db_session):
+    response = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="下部老叶有褐色斑点，现在结果期，距离采收大概 10 天。",
+            image_urls=["data:image/png;base64,abc123"],
+        )
+    )
+
+    detail = CaseOrchestrator(db_session).cases.get_detail(response.case_id)
+    assert detail is not None
+    assert detail.structured_data["image_evidence"] == ["data:image/png;base64,abc123"]
+    assert detail.structured_data["image_analysis_status"] == "not_configured"
+    assert "vision_observation" in detail.structured_data
+    assert any(event.event_type == EventType.VISION_ANALYZED for event in detail.events)

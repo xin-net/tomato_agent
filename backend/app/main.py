@@ -5,8 +5,14 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.database import Base, engine, get_db
+from app.core.security import create_access_token, verify_password
+from app.domain.models import User
 from app.repositories.case_repository import CaseRepository
+from app.repositories.reminder_repository import ReminderRepository
+from app.repositories.user_repository import UserRepository
+from app.schemas.auth import TokenResponse, UserCreate, UserLogin, UserRead
 from app.schemas.cases import (
     CaseDetail,
     CaseEventRead,
@@ -18,6 +24,7 @@ from app.schemas.cases import (
     ReplyInput,
 )
 from app.schemas.conversation import ConversationMessageInput, ConversationMessageResponse
+from app.schemas.reminders import ReminderCreate, ReminderRead, ReminderUpdate
 from app.services.case_orchestrator import CaseOrchestrator
 from app.services.conversation_service import ConversationService
 
@@ -57,20 +64,72 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.post("/api/auth/register", response_model=TokenResponse)
+def register(data: UserCreate, db: Session = Depends(get_db)) -> TokenResponse:
+    users = UserRepository(db)
+    if users.get_by_username(data.username):
+        raise HTTPException(status_code=409, detail="Username already exists")
+    user = users.create(data)
+    db.commit()
+    token = create_access_token(str(user.id), {"role": user.role})
+    return TokenResponse(access_token=token, user=UserRead.model_validate(user))
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(data: UserLogin, db: Session = Depends(get_db)) -> TokenResponse:
+    user = UserRepository(db).get_by_username(data.username)
+    if user is None or not verify_password(data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(str(user.id), {"role": user.role})
+    return TokenResponse(access_token=token, user=UserRead.model_validate(user))
+
+
+@app.get("/api/auth/me", response_model=UserRead)
+def me(current_user: User = Depends(get_current_user)) -> UserRead:
+    return UserRead.model_validate(current_user)
+
+
 @app.post("/api/cases", response_model=CaseResponse)
-def create_case(data: CreateCaseInput, db: Session = Depends(get_db)) -> CaseResponse:
+def create_case(
+    data: CreateCaseInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CaseResponse:
+    data.user_id = str(current_user.id)
     return CaseOrchestrator(db).create_case(data)
 
 
 @app.post("/api/conversation/messages", response_model=ConversationMessageResponse)
 def send_conversation_message(
-    data: ConversationMessageInput, db: Session = Depends(get_db)
+    data: ConversationMessageInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ConversationMessageResponse:
+    if data.case_id is not None:
+        _require_case_access(data.case_id, db, current_user)
+    data.user_id = str(current_user.id)
     return ConversationService(db).handle_message(data)
 
 
+def _require_case_access(case_id: int, db: Session, current_user: User | None):
+    case = CaseRepository(db).get(
+        case_id,
+        user_id=str(current_user.id) if current_user else None,
+        include_all=current_user.role == "admin" if current_user else False,
+    )
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
 @app.post("/api/cases/{case_id}/reply", response_model=CaseResponse)
-def reply_to_case(case_id: int, data: ReplyInput, db: Session = Depends(get_db)) -> CaseResponse:
+def reply_to_case(
+    case_id: int,
+    data: ReplyInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CaseResponse:
+    _require_case_access(case_id, db, current_user)
     try:
         return CaseOrchestrator(db).reply_to_case(case_id, data)
     except ValueError as exc:
@@ -79,8 +138,12 @@ def reply_to_case(case_id: int, data: ReplyInput, db: Session = Depends(get_db))
 
 @app.post("/api/cases/{case_id}/followup", response_model=CaseResponse)
 def submit_followup(
-    case_id: int, data: FollowupInput, db: Session = Depends(get_db)
+    case_id: int,
+    data: FollowupInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CaseResponse:
+    _require_case_access(case_id, db, current_user)
     try:
         return CaseOrchestrator(db).submit_followup(case_id, data)
     except ValueError as exc:
@@ -88,7 +151,13 @@ def submit_followup(
 
 
 @app.post("/api/cases/{case_id}/close", response_model=CaseResponse)
-def close_case(case_id: int, data: CloseCaseInput, db: Session = Depends(get_db)) -> CaseResponse:
+def close_case(
+    case_id: int,
+    data: CloseCaseInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CaseResponse:
+    _require_case_access(case_id, db, current_user)
     try:
         return CaseOrchestrator(db).close_case(case_id, data)
     except ValueError as exc:
@@ -96,29 +165,61 @@ def close_case(case_id: int, data: CloseCaseInput, db: Session = Depends(get_db)
 
 
 @app.get("/api/cases", response_model=list[CaseListItem])
-def list_cases(status: str | None = None, db: Session = Depends(get_db)) -> list[CaseListItem]:
-    return CaseRepository(db).list(status=status)
+def list_cases(
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[CaseListItem]:
+    return CaseRepository(db).list(
+        status=status,
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
 
 
 @app.get("/api/cases/{case_id}", response_model=CaseDetail)
-def get_case(case_id: int, db: Session = Depends(get_db)) -> CaseDetail:
-    case = CaseRepository(db).get_detail(case_id)
+def get_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CaseDetail:
+    case = CaseRepository(db).get_detail(
+        case_id,
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return case
 
 
 @app.get("/api/cases/{case_id}/events", response_model=list[CaseEventRead])
-def list_case_events(case_id: int, db: Session = Depends(get_db)) -> list[CaseEventRead]:
-    case = CaseRepository(db).get_detail(case_id)
+def list_case_events(
+    case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[CaseEventRead]:
+    case = CaseRepository(db).get_detail(
+        case_id,
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return list(case.events)
 
 
 @app.get("/api/cases/{case_id}/report", response_class=PlainTextResponse)
-def case_report(case_id: int, db: Session = Depends(get_db)) -> PlainTextResponse:
-    case = CaseRepository(db).get_detail(case_id)
+def case_report(
+    case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlainTextResponse:
+    case = CaseRepository(db).get_detail(
+        case_id,
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found")
 
@@ -129,6 +230,67 @@ def case_report(case_id: int, db: Session = Depends(get_db)) -> PlainTextRespons
             "Content-Disposition": f'attachment; filename="tomato-case-{case.id}.md"',
         },
     )
+
+
+@app.get("/api/reminders", response_model=list[ReminderRead])
+def list_reminders(
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ReminderRead]:
+    cases = CaseRepository(db).list(
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
+    reminders = ReminderRepository(db).list(
+        user_case_ids=[case.id for case in cases] if current_user.role != "admin" else None,
+        status=status,
+    )
+    return [ReminderRead.model_validate(reminder) for reminder in reminders]
+
+
+@app.get("/api/reminders/due", response_model=list[ReminderRead])
+def due_reminders(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ReminderRead]:
+    cases = CaseRepository(db).list(
+        user_id=str(current_user.id),
+        include_all=current_user.role == "admin",
+    )
+    reminders = ReminderRepository(db).due(
+        user_case_ids=[case.id for case in cases] if current_user.role != "admin" else None,
+    )
+    return [ReminderRead.model_validate(reminder) for reminder in reminders]
+
+
+@app.post("/api/reminders", response_model=ReminderRead)
+def create_reminder(
+    data: ReminderCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ReminderRead:
+    _require_case_access(data.case_id, db, current_user)
+    reminder = ReminderRepository(db).create(data)
+    db.commit()
+    return ReminderRead.model_validate(reminder)
+
+
+@app.patch("/api/reminders/{reminder_id}", response_model=ReminderRead)
+def update_reminder(
+    reminder_id: int,
+    data: ReminderUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ReminderRead:
+    reminders = ReminderRepository(db)
+    reminder = reminders.get(reminder_id)
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    _require_case_access(reminder.case_id, db, current_user)
+    updated = reminders.update(reminder, data)
+    db.commit()
+    return ReminderRead.model_validate(updated)
 
 
 def _build_case_report(case) -> str:
@@ -179,11 +341,17 @@ def _build_case_report(case) -> str:
         lines.append("-")
 
     image_evidence = (case.structured_data or {}).get("image_evidence", [])
+    vision_observation = (case.structured_data or {}).get("vision_observation")
+    image_analysis_status = (case.structured_data or {}).get("image_analysis_status", "-")
     lines.extend(["", "## 图片证据", ""])
     if image_evidence:
         lines.extend([f"- 图片 {index + 1}：{url}" for index, url in enumerate(image_evidence)])
         lines.append("")
-        lines.append("> MVP 阶段仅保存图片证据，尚未执行视觉诊断。")
+        lines.append(f"> 图片分析状态：{image_analysis_status}")
+        if vision_observation:
+            uncertainties = vision_observation.get("uncertainties", [])
+            if uncertainties:
+                lines.extend([f"> - {item}" for item in uncertainties])
     else:
         lines.append("-")
 

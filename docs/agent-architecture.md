@@ -101,8 +101,8 @@ flowchart TB
         FollowupMemory["Follow-up Memory"]:::memory
         KnowledgeMemory["Knowledge Memory"]:::memory
         UserProfile["User Profile 后续"]:::future
-        EnvMemory["Environment Memory 后续"]:::future
-        ImageMemory["Image Evidence Memory 后续"]:::future
+        EnvMemory["Environment Memory"]:::memory
+        ImageMemory["Image Evidence Memory"]:::memory
         ProvenanceMemory["Knowledge Provenance Memory 后续"]:::future
     end
 
@@ -110,8 +110,8 @@ flowchart TB
         TriggerEvent["TriggerEvent<br/>用户、复查、提醒、天气、图片、人工反馈"]:::trigger
         SymptomTool["SymptomExtractionTool"]:::tool
         FollowupParseTool["FollowupParseTool"]:::tool
-        VisionTool["VisionTool 后续"]:::future
-        WeatherTool["WeatherTool 后续"]:::future
+        VisionTool["VisionTool"]:::tool
+        WeatherTool["WeatherTool"]:::tool
     end
 
     WorkingMemory["Working Memory"]:::working
@@ -473,10 +473,10 @@ Response -> closure summary
 ```text
 Backend: Python + FastAPI
 Frontend: Vite + React + TypeScript + Ant Design + React Flow
-Persistence: PostgreSQL via SQLAlchemy + psycopg
+Persistence: PostgreSQL via SQLAlchemy + psycopg + Alembic
 Schemas: Pydantic
 Knowledge Memory: 结构化 Markdown 文件
-LLM use: MVP 暂不接入，先使用规则版症状结构化、Agent Decision、诊断和复查比较
+LLM use: 已有 OpenAIAdapter/VisionTool 接口边界；未配置 API Key 时结构化降级。主决策仍先使用规则版，避免 LLM 绕过状态和安全约束
 Deterministic code: 状态流转、安全策略、持久化、复查日期
 ```
 
@@ -519,15 +519,19 @@ MVP：
 - `EventMemoryTool`：追加和查询 Case Event。
 - `SafetyCheckTool`：强制安全检查。
 - `StateTransitionTool`：强制状态流转验证。
+- `VisionTool`：接收图片并生成视觉观察；未配置 OpenAI Key 时返回降级观察。
+- `WeatherTool`：从用户描述中抽取天气/湿度风险信号；外部天气 API 待接入。
+- `ReminderTool`：系统内复查提醒，创建 Follow-up 时生成，提交复查时取消。
+- `AuthTool`：JWT 登录态和病例归属过滤。
 
 完整版：
 
-- `VisionTool`：从图片中提取叶片、虫体、果实异常线索。
-- `WeatherTool`：获取天气、降雨、湿度、温度等环境上下文。
+- `VisionTool` 增强：稳定结构化输出叶片、虫体、果实异常线索，并保留置信度与不确定性。
+- `WeatherTool` 增强：获取真实天气、降雨、湿度、温度等环境上下文。
 - `EnvironmentSensorTool`：接入温室传感器或手动环境记录。
 - `KnowledgeImportTool`：从 Word/PDF/网页资料导入知识候选。
 - `KnowledgeCurationTool`：把原始资料整理成可控 Knowledge Entry。
-- `ReminderTool`：创建复查提醒和待办。
+- `CalendarAdapter`/`NotificationAdapter`：同步日历、提醒和待办。
 - `ReportTool`：导出病例报告。
 - `HumanSummaryTool`：生成给农技人员阅读的人工确认摘要。
 - `UserProfileTool`：维护跨病例用户种植档案。
@@ -593,12 +597,12 @@ MVP 的目标是证明“病例处置闭环”成立；最终目标不是把系�
 
 最终目标应包含以下能力：
 
-- 多模态感知：支持图片辅助识别叶片、虫体、果实异常，但图片结论仍进入 CaseOrchestrator，由 SafetyChecker 和 StateMachine 约束。
+- 多模态感知：当前已具备 VisionTool 接口边界和降级观察；后续配置真实 OpenAI API 并稳定结构化输出。图片结论仍进入 CaseOrchestrator，由 SafetyChecker 和 StateMachine 约束。
 - 知识来源治理：支持从 Word/PDF/网页资料导入知识，但运行时仍使用经过整理、可追溯的 Knowledge Entry，而不是直接裸 RAG。
 - 混合检索：在结构化 Markdown 的基础上增加 BM25/向量检索，并保留来源引用和安全过滤。
 - 跨病例记忆：基于已结案 Case 形成用户种植档案和常见问题摘要，但不让 User Profile 覆盖当前 Case 的事实。
-- 环境上下文：接入天气、湿度、温度或温室环境数据，用于辅助判断高湿、低温、高温和快速扩展风险。
-- 复查提醒：将 Follow-up 从被动页面入口扩展为提醒和待办机制。
+- 环境上下文：当前已解析用户描述的阴雨、高湿等信号；后续接入天气、湿度、温度或温室环境数据，用于辅助判断高湿、低温、高温和快速扩展风险。
+- 复查提醒：当前已有系统内提醒；后续扩展为日历、外部通知和待办同步。
 - 报告导出：支持导出 Case 全过程，包括初始症状、诊断依据、处置方案、复查趋势、安全提醒和结案总结。
 - 人工确认通道：当系统升级到 Human Confirmation 时，生成给农技人员阅读的结构化摘要。
 - 多作物扩展：在番茄闭环稳定后，再扩展黄瓜、辣椒、草莓等作物；扩展时新增 Knowledge Entry 和规则，而不是复制一套 Agent。
@@ -615,4 +619,4 @@ Agent 负责选择下一步动作
 
 也就是说，长期演进不是让 Agent 更自由，而是让它拥有更好的感知、更可靠的知识、更完整的记忆和更严格的约束。
 
-当前 MVP 已经允许用户在 Conversation 中附加图片，并将图片写入 `Image Evidence Memory`。这一步只保存证据和事件，不执行视觉诊断；后续接入 `VisionTool` 后，图片分析结果也必须作为新的观察进入 CaseOrchestrator，而不能绕过状态机、安全检查和事件记忆。
+当前 MVP 已经允许用户在 Conversation 中附加图片，并通过 `VisionTool` 写入 `Image Evidence Memory`、`VISION_ANALYZED` 事件和结构化观察。未配置 OpenAI API Key 时，工具会返回未配置观察；配置后可以执行真实视觉识别。无论哪种情况，图片分析结果都只能作为新的观察进入 CaseOrchestrator，不能绕过状态机、安全检查和事件记忆。

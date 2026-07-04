@@ -16,6 +16,7 @@ import {
   Layout,
   List,
   Modal,
+  Radio,
   Segmented,
   Space,
   Spin,
@@ -39,6 +40,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { ReactFlow, Background, Controls } from '@xyflow/react';
 import dayjs from 'dayjs';
@@ -49,12 +51,18 @@ import {
   downloadCaseReport,
   getCase,
   getSystemStatus,
+  getStoredToken,
+  listDueReminders,
   listCases,
+  login,
+  me,
+  register,
+  setStoredToken,
   sendConversationMessage,
   submitFollowup,
 } from './api';
 import { buildStateMachineElements, caseStatusLabels } from './stateMachine';
-import type { CaseDetail, CaseListItem, CaseResponse, CaseStatus, ChatMessage } from './types';
+import type { CaseDetail, CaseListItem, CaseResponse, CaseStatus, ChatMessage, Reminder, User } from './types';
 
 const { Header, Content, Sider } = Layout;
 const { Text, Title, Paragraph } = Typography;
@@ -134,6 +142,10 @@ function AgentWorkbench() {
   const [eventLimit, setEventLimit] = useState(8);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewScale, setPreviewScale] = useState(1);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [dueReminders, setDueReminders] = useState<Reminder[]>([]);
+  const [remindersOpen, setRemindersOpen] = useState(false);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const composerStacked = input.split(/\r?\n/).length > 2 || input.length > 48 || imageUrls.length > 0;
@@ -143,6 +155,10 @@ function AgentWorkbench() {
   );
 
   const refreshCases = useCallback(async () => {
+    if (!getStoredToken()) {
+      setCases([]);
+      return;
+    }
     setLoadingCases(true);
     try {
       const data = await listCases();
@@ -172,10 +188,27 @@ function AgentWorkbench() {
   }, []);
 
   useEffect(() => {
-    void refreshCases();
     void getSystemStatus()
       .then((result) => setSystemStatus(result.status))
       .catch(() => setSystemStatus('offline'));
+  }, []);
+
+  useEffect(() => {
+    if (!getStoredToken()) {
+      setAuthOpen(true);
+      return;
+    }
+    void me()
+      .then((user) => {
+        setCurrentUser(user);
+        setUserId(String(user.id));
+        return Promise.all([refreshCases(), listDueReminders()]);
+      })
+      .then(([, reminders]) => setDueReminders(reminders))
+      .catch(() => {
+        setStoredToken(null);
+        setAuthOpen(true);
+      });
   }, [refreshCases]);
 
   useEffect(() => {
@@ -313,6 +346,28 @@ function AgentWorkbench() {
     }
   }
 
+  async function handleAuthenticated(user: User) {
+    setCurrentUser(user);
+    setUserId(String(user.id));
+    setAuthOpen(false);
+    await refreshCases();
+    try {
+      setDueReminders(await listDueReminders());
+    } catch {
+      setDueReminders([]);
+    }
+  }
+
+  function handleLogout() {
+    setStoredToken(null);
+    setCurrentUser(null);
+    setSelectedCaseId(null);
+    setCaseDetail(null);
+    setCases([]);
+    setDueReminders([]);
+    setAuthOpen(true);
+  }
+
   return (
     <Layout className="app-shell">
       <Header className="app-header">
@@ -324,9 +379,21 @@ function AgentWorkbench() {
           <Tag color={systemStatus === 'ok' ? 'green' : systemStatus === 'checking' ? 'blue' : 'red'}>
             API {systemStatus}
           </Tag>
-          <Button icon={<ReloadOutlined />} onClick={() => void refreshCases()}>
+          {currentUser ? (
+            <Button
+              size="small"
+              icon={<UserOutlined />}
+              onClick={() => setRemindersOpen(true)}
+            >
+              {currentUser.username} · 待提醒 {dueReminders.length}
+            </Button>
+          ) : (
+            <Tag color="gold">未登录</Tag>
+          )}
+          <Button icon={<ReloadOutlined />} disabled={!currentUser} onClick={() => void refreshCases()}>
             刷新
           </Button>
+          {currentUser ? <Button onClick={handleLogout}>退出</Button> : null}
           <Button icon={<PlusOutlined />} onClick={handleNewConversation}>
             新会话
           </Button>
@@ -548,6 +615,16 @@ function AgentWorkbench() {
         scale={previewScale}
         onScaleChange={setPreviewScale}
         onClose={() => setPreviewImage(null)}
+      />
+      <AuthModal
+        open={authOpen}
+        onAuthenticated={(user) => void handleAuthenticated(user)}
+        onCancel={() => setAuthOpen(false)}
+      />
+      <ReminderModal
+        open={remindersOpen}
+        reminders={dueReminders}
+        onCancel={() => setRemindersOpen(false)}
       />
     </Layout>
   );
@@ -810,6 +887,98 @@ function ImagePreview({
         onClick={(event) => event.stopPropagation()}
       />
     </div>
+  );
+}
+
+function AuthModal({
+  open,
+  onAuthenticated,
+  onCancel,
+}: {
+  open: boolean;
+  onAuthenticated: (user: User) => void;
+  onCancel: () => void;
+}) {
+  const [form] = Form.useForm();
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [loading, setLoading] = useState(false);
+
+  async function submit(values: { username: string; password: string }) {
+    setLoading(true);
+    try {
+      const result = mode === 'login' ? await login(values) : await register(values);
+      setStoredToken(result.access_token);
+      message.success(mode === 'login' ? '登录成功' : '注册成功');
+      onAuthenticated(result.user);
+      form.resetFields();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '认证失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="账户"
+      open={open}
+      onCancel={onCancel}
+      confirmLoading={loading}
+      onOk={() => form.submit()}
+      okText={mode === 'login' ? '登录' : '注册'}
+    >
+      <Space direction="vertical" className="full-width" size={12}>
+        <Radio.Group
+          value={mode}
+          onChange={(event) => setMode(event.target.value)}
+          optionType="button"
+          buttonStyle="solid"
+          options={[
+            { label: '登录', value: 'login' },
+            { label: '注册', value: 'register' },
+          ]}
+        />
+        <Form form={form} layout="vertical" onFinish={(values) => void submit(values)}>
+          <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
+            <Input autoComplete="username" placeholder="例如 xiaxin" />
+          </Form.Item>
+          <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+            <Input.Password autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+          </Form.Item>
+        </Form>
+      </Space>
+    </Modal>
+  );
+}
+
+function ReminderModal({
+  open,
+  reminders,
+  onCancel,
+}: {
+  open: boolean;
+  reminders: Reminder[];
+  onCancel: () => void;
+}) {
+  return (
+    <Modal title="待处理提醒" open={open} footer={null} onCancel={onCancel}>
+      <List
+        dataSource={reminders}
+        locale={{ emptyText: <Empty description="暂无到期提醒" /> }}
+        renderItem={(item) => (
+          <List.Item>
+            <Space direction="vertical" size={4} className="full-width">
+              <Space>
+                <Tag color={item.status === 'pending' ? 'blue' : 'default'}>{item.status}</Tag>
+                <Text strong>Case #{item.case_id}</Text>
+                <Text type="secondary">{dayjs(item.due_at).format('YYYY-MM-DD HH:mm')}</Text>
+              </Space>
+              <Text type="secondary">{item.reason || '系统提醒复查番茄异常处置效果'}</Text>
+            </Space>
+          </List.Item>
+        )}
+      />
+    </Modal>
   );
 }
 

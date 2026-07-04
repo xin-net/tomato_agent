@@ -128,3 +128,28 @@ export interface ChatMessage {
   imageUrls?: string[];
   response?: CaseResponse;
 }
+
+export interface User {
+  id: number;
+  username: string;
+  role: string;
+  is_active: boolean;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+}
+
+export interface Reminder {
+  id: number;
+  case_id: number;
+  followup_id?: number | null;
+  due_at: string;
+  channel: string;
+  status: string;
+  reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
