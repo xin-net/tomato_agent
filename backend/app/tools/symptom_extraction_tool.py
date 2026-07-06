@@ -103,16 +103,6 @@ class SymptomExtractionTool:
         if days_to_harvest is not None:
             raw["days_to_harvest"] = days_to_harvest
 
-        recent_weather = self._extract_recent_weather(text)
-        if recent_weather:
-            raw["recent_weather"] = recent_weather
-            raw["weather_source"] = "user_explicit"
-
-        location_text = self._extract_location_text(text)
-        if location_text:
-            raw["location_text"] = location_text
-            raw["location_source"] = "user_explicit"
-
         environment = self._extract_environment(text)
         if environment:
             raw["environment"] = environment
@@ -153,43 +143,6 @@ class SymptomExtractionTool:
             if match:
                 return int(match.group(1))
         return None
-
-    def _extract_recent_weather(self, text: str) -> str | None:
-        weather_keywords = ["连续阴雨", "阴雨", "高湿", "潮湿", "降雨", "下雨", "低温", "高温", "闷热"]
-        found = []
-        for keyword in weather_keywords:
-            if keyword not in text:
-                continue
-            if any(keyword in existing for existing in found):
-                continue
-            found.append(keyword)
-        return "、".join(found) if found else None
-
-    def _extract_location_text(self, text: str) -> str | None:
-        patterns = [
-            r"(?:位于|地点是|种在|种植在|种植地点是|朋友在|帮.*?问.*?在)\s*([\u4e00-\u9fa5]{2,12}(?:省|市|县|区|镇|乡|村|附近)?)",
-            r"(?:在)\s*([\u4e00-\u9fa5]{2,12}(?:省|市|县|区|镇|乡|村|附近))",
-            r"([\u4e00-\u9fa5]{2,8}(?:省|市|县|区|镇|乡|村))\s*(?:的)?(?:番茄|棚|大棚|露地|阳台|地里)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                location = match.group(1).strip("，。；、 ")
-                location = self._normalize_location_text(location)
-                if location and location not in {"这里", "那边", "朋友", "别人"}:
-                    return location
-        return None
-
-    def _normalize_location_text(self, location: str) -> str:
-        for suffix in ["省", "市", "县", "区", "镇", "乡", "村"]:
-            index = location.find(suffix)
-            if index >= 1:
-                return location[: index + 1]
-        for marker in ["的", "大棚", "露地", "阳台", "番茄", "地里"]:
-            index = location.find(marker)
-            if index >= 2:
-                return location[:index]
-        return location
 
     def _extract_environment(self, text: str) -> str | None:
         if "温室" in text or "大棚" in text:

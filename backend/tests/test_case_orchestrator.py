@@ -139,6 +139,20 @@ def test_user_explicit_location_and_weather_override_browser_location(db_session
 
     monkeypatch.setattr("app.tools.weather_tool.WeatherTool._fetch_open_meteo", fake_weather)
 
+    def fake_location_language(self, message):
+        from app.tools.location_tool import LocationLanguageObservation
+
+        return LocationLanguageObservation(
+            explicit_location="成都市",
+            confidence="high",
+            evidence=["用户明确说在成都市的大棚番茄。"],
+        )
+
+    monkeypatch.setattr(
+        "app.tools.location_tool.LocationTool._observe_language_location",
+        fake_location_language,
+    )
+
     response = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(
             growth_stage="结果期",
@@ -341,6 +355,51 @@ def test_mold_and_yellow_spots_expanding_is_llm_followup_worsening(db_session, m
     detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
     compared = next(event for event in detail.events if event.event_type == EventType.FOLLOWUP_COMPARED)
     assert compared.system_output["trend"] == "WORSENING"
+
+
+def test_followup_no_new_pests_and_healthy_is_not_worsening(db_session, monkeypatch):
+    def fake_observe(self, **kwargs):
+        message = kwargs.get("message", "")
+        if "没有再长" in message:
+            return semantic_stub(
+                user_intent="followup_report",
+                is_followup_report=True,
+                followup_trend="IMPROVING",
+                followup_evidence=["用户表示虫子没有继续增加，植株看起来健康。"],
+                symptoms=["虫量未增加", "长势健康"],
+                possible_categories=["虫害"],
+            )
+        return semantic_stub(
+            affected_parts=["叶背"],
+            symptoms=["白色小虫"],
+            possible_categories=["虫害"],
+            mentioned_problems=["白粉虱"],
+        )
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_observe)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="叶背有很多白色小虫，一碰有白色飞虫，结果期，距离采收大概 10 天。",
+            affected_parts=["叶背"],
+            days_to_harvest=10,
+        )
+    )
+
+    response = CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        data=ReplyInput(message="现在虫子没有再长了，看起来很健康"),
+    )
+
+    assert response.response_type == "followup_result"
+    assert response.status == CaseStatus.IMPROVING
+    assert response.trend is not None
+    assert response.trend.value == "IMPROVING"
+
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    compared = next(event for event in detail.events if event.event_type == EventType.FOLLOWUP_COMPARED)
+    assert compared.system_output["trend"] == "IMPROVING"
 
 
 def test_vision_candidate_takes_priority_over_weak_text_match(db_session, monkeypatch):

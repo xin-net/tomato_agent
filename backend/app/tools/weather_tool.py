@@ -100,7 +100,7 @@ class WeatherTool:
                 uncertainties.append(f"未获得浏览器定位：{location_error}。")
             else:
                 uncertainties.append("未获得浏览器定位，天气工具只能根据用户文字描述判断。")
-            if explicit_weather:
+            if explicit_weather or risk_signals:
                 status = "user_weather"
                 provider = "user_description"
 

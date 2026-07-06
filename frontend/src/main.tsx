@@ -45,7 +45,7 @@ import {
 } from '@ant-design/icons';
 import { ReactFlow, Background, Controls } from '@xyflow/react';
 import dayjs from 'dayjs';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   apiUrl,
@@ -215,6 +215,7 @@ function AgentWorkbench() {
   const [authChecking, setAuthChecking] = useState(true);
   const [dueReminders, setDueReminders] = useState<Reminder[]>([]);
   const [remindersOpen, setRemindersOpen] = useState(false);
+  const messageStreamRef = useRef<HTMLDivElement | null>(null);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const composerStacked = input.split(/\r?\n/).length > 2 || input.length > 48 || imageUrls.length > 0;
@@ -295,6 +296,17 @@ function AgentWorkbench() {
     void refreshDetail(selectedCaseId);
   }, [refreshDetail, selectedCaseId]);
 
+  const scrollMessagesToBottom = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const stream = messageStreamRef.current;
+      if (stream) stream.scrollTop = stream.scrollHeight;
+    });
+  }, []);
+
+  useEffect(() => {
+    scrollMessagesToBottom();
+  }, [messages, scrollMessagesToBottom]);
+
   const visibleCases = useMemo(() => {
     if (filter === 'all') return cases;
     if (filter === 'closed') return cases.filter((item) => item.status === 'CLOSED');
@@ -320,6 +332,7 @@ function AgentWorkbench() {
       pending: true,
     };
     setMessages((current) => [...current, userMessage, pendingMessage]);
+    scrollMessagesToBottom();
     if (!selectedCaseId) {
       const optimisticCase: CaseListItem = {
         id: optimisticCaseId,
@@ -611,7 +624,7 @@ function AgentWorkbench() {
               </Space>
             </div>
 
-            <div className="message-stream">
+            <div className="message-stream" ref={messageStreamRef}>
               {messages.map((item) => (
                 <div key={item.id} className={`chat-bubble ${item.role}${item.pending ? ' pending' : ''}`}>
                   <div className="bubble-role">{item.role === 'user' ? '用户' : 'Agent'}</div>
@@ -685,7 +698,7 @@ function AgentWorkbench() {
                       label="采收"
                       value={harvestSummary(caseDetail)}
                     />
-                    <InfoLine label="上级咨询日期" value={formatDate(caseDetail.created_at)} />
+                    <InfoLine label="上次咨询日期" value={formatDate(caseDetail.created_at)} />
                     <InfoLine label="下次复查日期" value={formatDate(caseDetail.followup_date)} />
                     <ImageEvidence detail={caseDetail} onPreview={openPreview} />
                     {caseDetail.current_plan?.summary ? (
@@ -1196,6 +1209,8 @@ function environmentSummary(detail: CaseDetail) {
         current_temperature_c?: number | null;
         current_relative_humidity?: number | null;
         current_precipitation_mm?: number | null;
+        latitude?: number | null;
+        longitude?: number | null;
         risk_signals?: string[];
         uncertainties?: string[];
         requires_confirmation?: boolean;
@@ -1224,25 +1239,25 @@ function environmentSummary(detail: CaseDetail) {
     String(weather.status || '-');
   return {
     location:
-      weather.location && !['浏览器定位', '用户未提供地点'].includes(weather.location)
+      weather.location && weather.location !== '用户未提供地点'
         ? weather.location
-        : '暂未识别出',
+        : weather.latitude != null && weather.longitude != null
+          ? '当前位置附近'
+          : '暂未识别出',
     weather: weatherText,
   };
 }
 
 function stageSummary(detail: CaseDetail) {
-  const vision = detail.structured_data.vision_observation as { raw_text?: string | null } | undefined;
-  const source = vision?.raw_text ? '视觉/上下文推断' : '用户/上下文';
-  return detail.growth_stage ? `${detail.growth_stage}（${source}）` : '暂未识别出';
+  return detail.growth_stage || '暂未识别出';
 }
 
 function harvestSummary(detail: CaseDetail) {
   const vision = detail.structured_data.vision_observation as { harvest_hint?: string | null } | undefined;
-  if (detail.days_to_harvest == null && vision?.harvest_hint) return `${vision.harvest_hint}（视觉/上下文推断）`;
+  if (detail.days_to_harvest == null && vision?.harvest_hint) return vision.harvest_hint;
   if (detail.days_to_harvest == null) return '暂未识别出';
-  if (vision?.harvest_hint) return `${detail.days_to_harvest} 天（视觉提示：${vision.harvest_hint}）`;
-  return `${detail.days_to_harvest} 天（视觉/日期/上下文推断）`;
+  if (vision?.harvest_hint) return `${detail.days_to_harvest} 天 · ${vision.harvest_hint}`;
+  return `${detail.days_to_harvest} 天`;
 }
 
 function CompactList({ label, values }: { label: string; values?: string[] }) {

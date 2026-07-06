@@ -630,6 +630,7 @@ class CaseOrchestrator:
             lambda: self.tool_registry.call(
                 "LocationTool",
                 fallback_location=self._extract_location(case, message),
+                user_message=message,
                 browser_latitude=latitude,
                 browser_longitude=longitude,
                 browser_location_label=location_label,
@@ -942,21 +943,12 @@ class CaseOrchestrator:
     def _semantic_raw(self, semantic: dict) -> dict:
         raw: dict[str, Any] = {}
         mapping = {
-            "location_text": "location_text",
-            "recent_weather": "recent_weather",
-            "growth_stage": "growth_stage",
-            "harvest_hint": "harvest_hint",
-            "days_to_harvest": "days_to_harvest",
             "severity": "severity",
         }
         for source_key, target_key in mapping.items():
             value = semantic.get(source_key)
             if value not in (None, "", [], {}):
                 raw[target_key] = value
-        if semantic.get("location_text"):
-            raw["location_source"] = "llm_semantic"
-        if semantic.get("recent_weather"):
-            raw["weather_source"] = "llm_semantic"
         if semantic.get("mentioned_problems"):
             raw["mentioned_problems"] = self._unique([str(item) for item in semantic.get("mentioned_problems", [])])
         if semantic.get("corrections"):

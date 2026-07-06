@@ -162,8 +162,8 @@ class AgentDecisionEngine:
             "如果用户只是补充图片、补充症状、提出猜测、问“是不是白粉虱/早疫病”、纠正诊断或继续询问怎么办，"
             "应选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO，而不是 COMPARE_FOLLOWUP。"
             "你还必须判断本轮用户意图 user_intent 和回答焦点 response_focus。"
-            "semantic_observation 是上一层大模型语义观察结果，已经负责理解地点、天气、阶段、采收和复查变化；"
-            "你应优先使用它，而不是做关键词猜测。"
+            "semantic_observation 是上一层大模型语义观察结果，只负责本轮意图、复查变化、用户纠正和症状语义；"
+            "地点、天气、视觉阶段/采收来自对应工具，你应综合这些观察，而不是做关键词猜测。"
             "如果用户追问“能不能用药、能不能打药、采收前能否用药”，user_intent 应为 chemical_safety_question，"
             "response_focus 应聚焦采收安全、是否适合用药、安全边界和下一步观察，不要重复完整诊断。"
             "如果用户追问“用什么药、推荐药名、剂量、兑水、频次”，user_intent 应为 pesticide_detail_question，"
@@ -356,6 +356,8 @@ class AgentDecisionEngine:
                 "followup_report": ["判断变化趋势", "根据变化调整方案和复查"],
                 "correction": ["按用户纠正更新病例事实", "重新评估诊断和方案"],
                 "chemical_question": ["回答用药安全", "结合采收和安全边界"],
+                "chemical_safety_question": ["回答用药安全", "结合采收和安全边界"],
+                "pesticide_detail_question": ["说明不能直接给具体药名/剂量", "给出安全替代处理和咨询路径"],
                 "location_update": ["更新实际种植地点", "重新观察天气环境"],
                 "weather_update": ["更新天气环境", "重新评估风险"],
                 "handling_plan_question": ["聚焦下一步处理", "说明观察重点和复查安排"],

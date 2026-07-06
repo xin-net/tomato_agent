@@ -638,7 +638,7 @@ body {
 
 .info-line {
   display: grid;
-  grid-template-columns: 76px 1fr;
+  grid-template-columns: 94px 1fr;
   gap: 10px;
 }
 

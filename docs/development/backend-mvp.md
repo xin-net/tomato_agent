@@ -99,7 +99,8 @@ uvicorn app.main:app --reload
 ## 工具状态
 
 - `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API 并要求结构化 JSON；输出会写入 `vision_observation`，再由 `CaseOrchestrator` 融合成 `multimodal_observation`，供 Agent 决策、知识检索和诊断证据使用。未配置时返回结构化降级观察。
-- `SemanticObservationTool`：使用大模型理解用户本轮自然语言，结构化判断地点、天气、阶段、采收、是否为复查变化、复查趋势和用户纠正。产品体验上语义理解由该工具和 AgentDecisionEngine 主导，硬规则只负责状态合法性、安全边界和开发环境降级。
+- `SemanticObservationTool`：使用大模型理解用户本轮自然语言，只结构化判断本轮意图、是否为复查变化、复查趋势、用户纠正和症状语义。它不负责地点、天气、阶段或采收，避免和 LocationTool、WeatherTool、VisionTool 抢职责。
+- `LocationTool`：使用独立 LLM 判断用户本轮是否明确提供种植地点，并处理用户显式地点、病例记忆、浏览器定位和反向地理编码的优先级。
 - `WeatherTool`：优先使用浏览器经纬度调用 Open-Meteo 获取实时温度、湿度、降水和风速；如果用户文字明确提供地点或天气，则用户输入优先于浏览器定位；如果定位失败，会把失败原因写入工具事件和病例记忆，再降级为文本天气线索。
 - `OpenAIAdapter`：文本模型适配器已具备真实调用边界，用于 Agent 决策、回复表达和视觉工具的模型调用。
 - `ReminderRepository` / `CalendarReminderTool`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒；同时提供 Google Calendar 添加链接和 ICS 下载。网页端不能无授权静默写入 Windows/macOS/手机系统日历，自动同步需要后续接 Google/Microsoft/Apple 日历授权或本地桌面桥接。
