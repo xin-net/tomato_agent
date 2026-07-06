@@ -22,6 +22,14 @@ class ReminderRepository:
     def get(self, reminder_id: int) -> Reminder | None:
         return self.db.get(Reminder, reminder_id)
 
+    def pending_for_followup(self, followup_id: int) -> Reminder | None:
+        stmt = (
+            select(Reminder)
+            .where(Reminder.followup_id == followup_id, Reminder.status == "pending")
+            .order_by(Reminder.due_at.asc())
+        )
+        return self.db.scalar(stmt)
+
     def list(
         self,
         user_case_ids: list[int] | None = None,
@@ -60,4 +68,22 @@ class ReminderRepository:
         )
         for reminder in self.db.scalars(stmt):
             reminder.status = "cancelled"
+        self.db.flush()
+
+    def reschedule_for_followup(
+        self,
+        followup_id: int,
+        due_at: datetime,
+        reason: str,
+        channel: str | None = None,
+    ) -> None:
+        stmt = select(Reminder).where(
+            Reminder.followup_id == followup_id,
+            Reminder.status == "pending",
+        )
+        for reminder in self.db.scalars(stmt):
+            reminder.due_at = due_at
+            reminder.reason = reason
+            if channel:
+                reminder.channel = channel
         self.db.flush()

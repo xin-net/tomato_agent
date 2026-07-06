@@ -9,6 +9,7 @@ class SafetyContext:
     suspected_problem: str | None = None
     severity: str | None = None
     uncertain: bool = False
+    weather_risk_signals: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,11 @@ class SafetyChecker:
         if context.uncertain:
             risk_level = "medium"
             warnings.append("当前诊断仍有不确定性，不能给出确定性处方。")
+
+        if context.weather_risk_signals:
+            if risk_level == "low":
+                risk_level = "medium"
+            warnings.extend(context.weather_risk_signals[:3])
 
         if context.severity in {"大面积", "严重", "快速扩展", "果实受害"}:
             risk_level = "high"

@@ -12,9 +12,16 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "dev-only-change-me-with-at-least-32-bytes"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
+    llm_provider: str = "openai"
+    agent_decision_mode: str = "llm"
     openai_api_key: str | None = None
-    openai_text_model: str = "gpt-4.1-mini"
-    openai_vision_model: str = "gpt-4.1-mini"
+    openai_base_url: str | None = None
+    openai_text_model: str = "gpt-5.5"
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_text_model: str = "deepseek-v4-pro"
+    vision_provider: str = "openai"
+    openai_vision_model: str = "gpt-5.5"
     weather_api_key: str | None = None
     cors_origins: str = (
         "http://localhost:5174,http://127.0.0.1:5174,"

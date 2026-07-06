@@ -17,6 +17,9 @@ class FollowupRepository:
         self.db.flush()
         return followup
 
+    def get(self, followup_id: int) -> Followup | None:
+        return self.db.get(Followup, followup_id)
+
     def active_for_case(self, case_id: int) -> Followup | None:
         stmt = (
             select(Followup)
@@ -30,5 +33,11 @@ class FollowupRepository:
         followup.submitted_at = datetime.now(timezone.utc)
         followup.user_description = description
         followup.result = result
+        self.db.flush()
+        return followup
+
+    def reschedule(self, followup: Followup, due_date: date, checklist: list[str]) -> Followup:
+        followup.due_date = due_date
+        followup.checklist = checklist
         self.db.flush()
         return followup

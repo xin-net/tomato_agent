@@ -1,6 +1,6 @@
 # Tomato Case Agent
 
-番茄病虫害处置闭环管理系统 MVP。
+番茄病虫害处置闭环管理系统。当前 MVP 闭环已完成，项目进入完整版能力演进阶段。
 
 这个项目不是普通问答机器人，而是一个面向番茄异常处置的 Case Agent：用户只需要聊天和上传图片，系统自动创建病例，基于病例状态、事件记忆、工具观察和安全约束推进诊断、处置、复查、提醒、升级或结案。
 
@@ -9,7 +9,7 @@
 - 登录与权限：用户名/密码注册登录，JWT 鉴权，普通用户只能访问自己的病例，管理员角色预留跨用户能力。
 - Conversation 入口：用户不用手动创建 Case，聊天消息会自动创建或续接当前活跃病例。
 - Case/Event Memory：保存症状、部位、阶段、天气、采收时间、图片证据、工具观察、Agent 决策、状态变化和回复记录。
-- Tool 层：已接入视觉工具、天气工具、内部提醒工具和 OpenAI 文本适配器；未配置 API Key 时会结构化降级，不阻塞本地验证。
+- Tool 层：已接入视觉工具、日期工具、天气工具、内部提醒/日历链接工具和 OpenAI 文本适配器；工具输出会进入 Case/Event Memory，再影响安全检查、方案和回复。
 - StateMachine：约束病例生命周期流转，避免 Agent 任意跳状态。
 - SafetyChecker：对临近采收、近期用药、不确定性和高风险情况做安全检查。
 - Follow-up：创建复查任务，提交复查后比较趋势，并自动取消对应提醒。
@@ -37,7 +37,9 @@ postgresql+psycopg://xiaxin:123456@127.0.0.1:5432/tomato_agent
 Copy-Item backend/.env.example backend/.env
 ```
 
-OpenAI 和天气 API 暂时可以留空。留空时，视觉/文本/天气工具会返回“未配置”的结构化观察，Agent 主流程仍然可以验证。
+OpenAI 和 DeepSeek API 暂时可以留空。天气默认使用浏览器经纬度调用 Open-Meteo 免 Key 接口；定位失败或用户显式提供地点/天气时，会降级为文字天气线索并写入工具事件。
+
+文本 LLM 可以通过 `LLM_PROVIDER` 选择 `openai` 或 `deepseek`。DeepSeek 当前官方 API 未提供图片输入/视觉识别能力，因此 `VISION_PROVIDER=deepseek` 时系统会保存图片证据并明确返回“不支持视觉识别”；真实图片识别仍需使用支持多模态输入的视觉模型提供方。
 
 ## 开发模式
 
@@ -142,8 +144,8 @@ alembic upgrade head
 
 ## 当前边界
 
-- 视觉工具已接入 OpenAI SDK 边界，但真实图片识别需要配置 `OPENAI_API_KEY` 后再进一步调试提示词和结构化输出。
-- 天气工具当前优先解析用户描述，真实天气 API 适配器预留在 `WEATHER_API_KEY` 后续接入。
-- 日历提醒当前是系统内部提醒；Google/Outlook/系统通知属于后续外部 Tool Adapter。
+- 视觉工具已接入 OpenAI Responses API：配置 `OPENAI_API_KEY` 后会对图片生成结构化观察，并融合进 Case Memory、Agent 决策、知识检索和诊断证据；未配置时返回降级观察。
+- 天气工具优先使用浏览器定位获取实时温度、湿度、降水和风速；用户明确说明“帮别人问/植株在某地/最近天气”时，以用户输入覆盖当前位置。
+- 日历提醒当前是系统内部提醒，并提供 Google Calendar 添加链接和 ICS 下载；网页端不能无授权静默写入 Windows/macOS/手机系统日历，自动同步需要后续接日历 OAuth 或本地桌面桥接。
 - Google/GitHub OAuth 登录已接入；本地使用前需要在对应 OAuth App 后台配置回调地址，并在 `backend/.env` 填写 Client ID / Client Secret。
 - 知识库仍是人工整理 Markdown，Word/PDF RAG 暂未实现。

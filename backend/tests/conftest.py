@@ -26,7 +26,12 @@ def db_session():
 
 @pytest.fixture(autouse=True)
 def disable_external_api_keys(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("VISION_PROVIDER", "openai")
+    monkeypatch.setenv("AGENT_DECISION_MODE", "rule")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("WEATHER_API_KEY", "")
     get_settings.cache_clear()
     yield

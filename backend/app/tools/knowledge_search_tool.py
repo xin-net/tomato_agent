@@ -68,13 +68,40 @@ class KnowledgeSearchTool:
             + [entry.problem_name, entry.category]
         )
         score = 0
+        for problem in symptoms.raw.get("mentioned_problems", []):
+            if problem == entry.problem_name:
+                score += 12
+            elif problem and self._is_related(problem, haystack):
+                score += 8
+        for problem in symptoms.raw.get("vision_possible_problems", []):
+            if problem == entry.problem_name:
+                score += 14
+            elif problem and self._is_related(problem, haystack):
+                score += 9
         for symptom in symptoms.symptoms:
-            if symptom and symptom in haystack:
+            if symptom and self._is_related(symptom, haystack):
                 score += 3
         for part in symptoms.affected_parts:
-            if part and part in haystack:
+            if part and self._is_related(part, haystack):
                 score += 2
         for category in symptoms.possible_categories:
             if category and category in entry.category:
                 score += 1
         return score
+
+    def _is_related(self, needle: str, haystack: str) -> bool:
+        if needle in haystack:
+            return True
+        compact = re.sub(r"\s+", "", needle)
+        if compact and compact in haystack:
+            return True
+        if len(compact) >= 3:
+            chunks = {compact[index : index + 3] for index in range(len(compact) - 2)}
+            if any(chunk in haystack for chunk in chunks):
+                return True
+        tokens = [
+            token
+            for token in re.split(r"[，。；、\s]+", needle)
+            if len(token) >= 2 and token not in {"可能", "疑似", "可见", "出现"}
+        ]
+        return any(token in haystack for token in tokens)

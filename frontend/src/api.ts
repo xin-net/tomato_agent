@@ -11,6 +11,12 @@ import type {
 const TOKEN_KEY = 'tomatoAgentAccessToken';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
+export function apiUrl(path?: string | null) {
+  if (!path) return '';
+  if (/^https?:\/\//.test(path)) return path;
+  return `${API_BASE_URL}${path}`;
+}
+
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -91,6 +97,11 @@ export function sendConversationMessage(input: {
   message: string;
   case_id?: number | null;
   image_urls?: string[];
+  latitude?: number | null;
+  longitude?: number | null;
+  location_label?: string | null;
+  location_source?: string | null;
+  location_error?: string | null;
 }) {
   return request<ConversationMessageResponse>('/api/conversation/messages', {
     method: 'POST',

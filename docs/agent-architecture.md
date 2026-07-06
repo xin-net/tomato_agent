@@ -17,14 +17,14 @@ API / UI
   -> CaseOrchestrator
     -> assemble Working Memory
     -> structure symptoms or follow-up input
-    -> ask AgentDecisionEngine for next Agent Action
+    -> ask AgentDecisionEngine for next Agent Action, turn intent and response focus
     -> validate with StateMachine and SafetyChecker
     -> execute action tools
     -> persist Case Events and Case Memory
     -> return user-facing response
 ```
 
-`CaseOrchestrator` 是 Agent runtime。`AgentDecisionEngine` 是决策层。完整的 Agent 不是某一个类，而是由运行时、决策、记忆、工具、约束和持久化共同组成的回路。
+`CaseOrchestrator` 是 Agent runtime。`AgentDecisionEngine` 是决策层，它不只选择下一步动作，也会输出本轮用户意图和回答焦点，避免后续追问被旧病例上下文淹没。完整的 Agent 不是某一个类，而是由运行时、决策、记忆、工具、约束、表达层和持久化共同组成的回路。
 
 ## 粗略版流程图
 
@@ -137,7 +137,9 @@ flowchart TB
         CompareTool["FollowupCompareTool"]:::tool
         ImportTool["KnowledgeImportTool 后续"]:::future
         CurationTool["KnowledgeCurationTool 后续"]:::future
-        ReminderTool["ReminderTool 后续"]:::future
+        CalendarReminderTool["CalendarReminderTool"]:::tool
+        DateTool["DateTool"]:::tool
+        ResponseComposer["ResponseComposer"]:::tool
         ReportTool["ReportTool 后续"]:::future
         HumanSummaryTool["HumanSummaryTool 后续"]:::future
         AuditTool["AuditTool 后续"]:::future
@@ -223,7 +225,9 @@ flowchart TB
     VisionTool -.-> VisionAdapter
     ImportTool -.-> DocumentAdapter
     KnowledgeTool -.-> VectorAdapter
-    ReminderTool -.-> NotificationAdapter
+    CalendarReminderTool -.-> NotificationAdapter
+    DateTool --> Orchestrator
+    ResponseComposer --> LLMAdapter
     ReportTool -.-> ExportAdapter
     HumanSummaryTool -.-> LLMAdapter
     CurationTool -.-> KnowledgeMemory
@@ -413,6 +417,20 @@ User Profile
 
 系统不应该把通用的“最近 10 轮消息”作为主要记忆。复查比较应该使用相关 Case Event 和当前 Follow-up 上下文。
 
+## 当前架构修正原则
+
+最近一轮优化确认了两个真实架构问题：
+
+- 旧问题一：回答生成只拿完整病例结果，不知道本轮用户是在问“能不能用药”还是“用什么药”，导致后续追问不断重复首次诊断。
+- 旧问题二：日期、天气和提醒有代码，但没有作为正式工具进入 Agent trace 和 Working Memory，容易让系统看起来像普通后端流程。
+
+当前修正：
+
+- `AgentDecisionEngine` 输出 `user_intent` 和 `response_focus`。动作仍然是有限白名单，但回答层会按本轮焦点组织语言。
+- `ResponseComposer` 只负责表达，不允许修改诊断、处理建议、采收安全、复查安排和用药边界。
+- `DateTool`、`WeatherTool`、`CalendarReminderTool` 进入正式工具层和事件记录；后续可继续接 MCP 或外部 API。
+- 旧病例事实会保留给诊断工具使用，但回答内容不会被旧上下文压过。也就是说，记忆用于判断，不应该让每一轮回复都像重新开诊断报告。
+
 ## 动作执行路径
 
 ### ASK_MORE_INFO
@@ -476,7 +494,8 @@ Frontend: Vite + React + TypeScript + Ant Design + React Flow
 Persistence: PostgreSQL via SQLAlchemy + psycopg + Alembic
 Schemas: Pydantic
 Knowledge Memory: 结构化 Markdown 文件
-LLM use: 已有 OpenAIAdapter/VisionTool 接口边界；未配置 API Key 时结构化降级。主决策仍先使用规则版，避免 LLM 绕过状态和安全约束
+LLM use: VisionTool 已通过 OpenAI Responses API 生成结构化视觉观察，并进入多模态融合；AgentDecisionEngine 可使用 LLM 输出受控 JSON 决策，后端继续用 Action 白名单、StateMachine、SafetyChecker 和输出策略约束它。规则决策主要作为测试基线和不可用环境下的开发模式，不再作为产品体验目标
+Tool protocol: DateTool、WeatherTool、CalendarReminderTool 等工具通过 ToolRegistry 统一描述和调用；`backend/app/mcp_server.py` 提供可选 MCP server 入口，后续可把这些能力暴露给 MCP Host 或接外部 MCP 工具
 Deterministic code: 状态流转、安全策略、持久化、复查日期
 ```
 
@@ -519,14 +538,18 @@ MVP：
 - `EventMemoryTool`：追加和查询 Case Event。
 - `SafetyCheckTool`：强制安全检查。
 - `StateTransitionTool`：强制状态流转验证。
-- `VisionTool`：接收图片并生成视觉观察；未配置 OpenAI Key 时返回降级观察。
-- `WeatherTool`：从用户描述中抽取天气/湿度风险信号；外部天气 API 待接入。
-- `ReminderTool`：系统内复查提醒，创建 Follow-up 时生成，提交复查时取消。
+- `VisionTool`：接收图片并生成结构化视觉观察；配置 OpenAI Key 后调用多模态模型，未配置时返回降级观察。输出进入 `vision_observation` 和 `multimodal_observation`，再参与 Agent 决策、知识检索和诊断证据。
+- `DateTool`：每轮读取当前日期和时间，进入 Working Memory，用于复查到期、采收安全和提醒调整。
+- `WeatherTool`：优先使用浏览器定位调用 Open-Meteo 免 Key 天气接口，获取实时温度、湿度、降水和风速；未获定位或接口失败时降级为从用户描述中抽取天气、湿度、温度和通风风险信号。天气风险会进入 SafetyChecker、PlanTool 和用户可见回复。
+- `CalendarReminderTool`：系统内复查提醒，创建 Follow-up 时生成，方案变化时重排，提交复查时取消；同时生成 Google Calendar 添加链接和 ICS 下载链接。网页端不能在无授权情况下静默写入用户设备日历；若后续需要自动写入 Google/Microsoft 日历，需要增加对应 OAuth scope 和 Calendar API。
+- `ResponseComposer`：把结构化诊断/方案改写为用户可读回复。它必须遵守 SafetyChecker 的边界，且根据 AgentDecisionEngine 输出的 `user_intent` 和 `response_focus` 聚焦本轮问题，避免每轮重复首次诊断。
+- `ToolRegistry`：统一注册、描述和调用内部工具，保持 MCP 化边界。
+- `MCP Server`：可选入口，当前暴露日期和天气观察工具；后续可继续暴露日历、知识检索或外部 MCP 工具。
 - `AuthTool`：JWT 登录态和病例归属过滤。
 
 完整版：
 
-- `VisionTool` 增强：稳定结构化输出叶片、虫体、果实异常线索，并保留置信度与不确定性。
+- `VisionTool` 增强：当前已稳定结构化输出叶片、虫体、果实异常线索，并保留置信度与不确定性；后续重点是扩大图像质量检查、部位标准化、病虫害候选映射和人工确认反馈。
 - `WeatherTool` 增强：获取真实天气、降雨、湿度、温度等环境上下文。
 - `EnvironmentSensorTool`：接入温室传感器或手动环境记录。
 - `KnowledgeImportTool`：从 Word/PDF/网页资料导入知识候选。
@@ -597,7 +620,7 @@ MVP 的目标是证明“病例处置闭环”成立；最终目标不是把系�
 
 最终目标应包含以下能力：
 
-- 多模态感知：当前已具备 VisionTool 接口边界和降级观察；后续配置真实 OpenAI API 并稳定结构化输出。图片结论仍进入 CaseOrchestrator，由 SafetyChecker 和 StateMachine 约束。
+- 多模态感知：当前已具备真实 OpenAI 视觉调用边界和结构化输出，视觉观察会与文本症状融合后进入 CaseOrchestrator，由 SafetyChecker 和 StateMachine 约束。后续继续增强图像质量判断、部位标准化和人工确认反馈。
 - 知识来源治理：支持从 Word/PDF/网页资料导入知识，但运行时仍使用经过整理、可追溯的 Knowledge Entry，而不是直接裸 RAG。
 - 混合检索：在结构化 Markdown 的基础上增加 BM25/向量检索，并保留来源引用和安全过滤。
 - 跨病例记忆：基于已结案 Case 形成用户种植档案和常见问题摘要，但不让 User Profile 覆盖当前 Case 的事实。
@@ -619,4 +642,4 @@ Agent 负责选择下一步动作
 
 也就是说，长期演进不是让 Agent 更自由，而是让它拥有更好的感知、更可靠的知识、更完整的记忆和更严格的约束。
 
-当前 MVP 已经允许用户在 Conversation 中附加图片，并通过 `VisionTool` 写入 `Image Evidence Memory`、`VISION_ANALYZED` 事件和结构化观察。未配置 OpenAI API Key 时，工具会返回未配置观察；配置后可以执行真实视觉识别。无论哪种情况，图片分析结果都只能作为新的观察进入 CaseOrchestrator，不能绕过状态机、安全检查和事件记忆。
+当前 MVP 已经允许用户在 Conversation 中附加图片，并通过 `VisionTool` 写入 `Image Evidence Memory`、`VISION_ANALYZED` 事件和结构化观察。配置 OpenAI API Key 后，图片会被多模态模型解析为发生部位、可见症状、候选问题、严重程度线索、不确定点和建议追问；`CaseOrchestrator` 会把它与用户文字融合为 `multimodal_observation`，再交给决策器、知识检索和诊断工具。未配置 OpenAI API Key 时，工具会返回未配置观察，主流程仍可验证。无论哪种情况，图片分析结果都只能作为新的观察进入 CaseOrchestrator，不能绕过状态机、安全检查和事件记忆。

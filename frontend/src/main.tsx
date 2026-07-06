@@ -27,8 +27,6 @@ import {
   theme,
 } from 'antd';
 import {
-  CalendarOutlined,
-  CheckCircleOutlined,
   ClockCircleOutlined,
   CloseOutlined,
   DownloadOutlined,
@@ -50,7 +48,7 @@ import dayjs from 'dayjs';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  closeCase,
+  apiUrl,
   downloadCaseReport,
   getCase,
   getSystemStatus,
@@ -63,10 +61,9 @@ import {
   register,
   setStoredToken,
   sendConversationMessage,
-  submitFollowup,
 } from './api';
 import { buildStateMachineElements, caseStatusLabels } from './stateMachine';
-import type { CaseDetail, CaseListItem, CaseResponse, CaseStatus, ChatMessage, Reminder, User } from './types';
+import type { AgentTrace, CaseDetail, CaseListItem, CaseResponse, CaseStatus, ChatMessage, Reminder, User } from './types';
 
 const { Header, Content, Sider } = Layout;
 const { Text, Title, Paragraph } = Typography;
@@ -82,6 +79,8 @@ const statusColors: Partial<Record<CaseStatus, string>> = {
   CLOSED: 'default',
 };
 
+const agentThinkingSteps = ['观察症状和图片', '判断信息是否足够', '检查采收和用药安全', '生成处理与复查计划'];
+
 function createDebugUserId() {
   const key = 'tomatoAgentWorkbenchUserId';
   const existing = sessionStorage.getItem(key);
@@ -92,6 +91,44 @@ function createDebugUserId() {
 }
 
 function responseToMessage(response: CaseResponse) {
+  if (response.message) return response.message;
+
+  if (response.advice) {
+    const advice = response.advice;
+    const lines = [humanSummary(response)];
+
+    if (advice.immediate_actions.length) {
+      lines.push('', `现在先做这几件事就行：${inlineList(advice.immediate_actions)}。`);
+    }
+    if (advice.observation_points.length) {
+      lines.push(`接下来主要盯住：${inlineList(advice.observation_points)}。`);
+    }
+    if (advice.chemical_advice || advice.harvest_safety) {
+      lines.push('', `${advice.chemical_advice} ${advice.harvest_safety}`.trim());
+    }
+    if (response.diagnosis?.evidence.length) {
+      lines.push('', `我主要是根据 ${inlineList(response.diagnosis.evidence, 4)} 来判断的。`);
+    }
+    if (response.diagnosis?.confusions.length) {
+      lines.push(`不过它也容易和 ${inlineList(response.diagnosis.confusions, 3)} 混在一起，所以先按保守办法处理。`);
+    }
+    if (advice.escalation_conditions.length) {
+      lines.push('', `如果后面出现 ${inlineList(advice.escalation_conditions, 4)}，就别继续自己扛了，建议找当地农技人员确认。`);
+    }
+    if (advice.followup_timing) {
+      lines.push('', `我会按这个病例继续跟踪：${advice.followup_timing}`);
+    }
+    if (advice.followup_if_better.length || advice.followup_if_worse.length) {
+      lines.push(
+        `到时候你直接发一句变化就行，比如有没有新增、有没有扩散、果实有没有受影响。我会根据变化重新调整方案。`,
+      );
+    }
+    if (response.decision?.questions.length) {
+      lines.push('', '我还需要你补充几句：', ...response.decision.questions.map((question, index) => `${index + 1}. ${question}`));
+    }
+    return lines.join('\n');
+  }
+
   const lines = [response.message];
   if (response.decision?.questions.length) {
     lines.push('', ...response.decision.questions.map((question, index) => `${index + 1}. ${question}`));
@@ -101,6 +138,9 @@ function responseToMessage(response: CaseResponse) {
       '',
       `疑似问题：${response.diagnosis.suspected_problem || '-'} / ${response.diagnosis.likelihood || '-'}`,
     );
+    if (response.diagnosis.evidence.length) {
+      lines.push('依据：', ...response.diagnosis.evidence.map((item) => `- ${item}`));
+    }
   }
   if (response.followup) {
     lines.push(`复查日期：${response.followup.due_date}`);
@@ -111,6 +151,25 @@ function responseToMessage(response: CaseResponse) {
   return lines.join('\n');
 }
 
+function inlineList(values?: string[], limit = 5) {
+  return (values || []).filter(Boolean).slice(0, limit).join('、') || '几个关键变化';
+}
+
+function humanSummary(response: CaseResponse) {
+  const advice = response.advice;
+  if (!advice) return response.message;
+  if (!advice.information_sufficient) {
+    return `${advice.plain_summary} 我先不急着给你定病名，因为现在直接处理容易跑偏。`;
+  }
+  const diagnosis = response.diagnosis?.suspected_problem;
+  const category = advice.problem_category ? `${advice.problem_category}类问题` : '番茄异常';
+  const severity = advice.severity ? `，严重程度我先按“${advice.severity}”看` : '';
+  if (diagnosis) {
+    return `我看了一下，更像是 ${diagnosis}，属于${category}${severity}。先别慌，当前更适合按保守办法处理，再用复查结果来验证判断。`;
+  }
+  return `${advice.plain_summary} 先按“${advice.action_mode}”来处理，我会继续根据你后面发来的变化调整方案。`;
+}
+
 function formatDate(value?: string | null) {
   if (!value) return '-';
   return dayjs(value).format('YYYY-MM-DD');
@@ -119,6 +178,14 @@ function formatDate(value?: string | null) {
 function statusTag(status?: CaseStatus | null) {
   if (!status) return <Tag>未创建</Tag>;
   return <Tag color={statusColors[status]}>{caseStatusLabels[status] || status}</Tag>;
+}
+
+function geolocationErrorText(error: unknown) {
+  const geoError = error as Partial<GeolocationPositionError>;
+  if (geoError.code === 1) return '浏览器定位权限被拒绝';
+  if (geoError.code === 2) return '浏览器暂时无法获取当前位置';
+  if (geoError.code === 3) return '浏览器定位超时';
+  return '浏览器定位失败';
 }
 
 function AgentWorkbench() {
@@ -140,8 +207,6 @@ function AgentWorkbench() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [sending, setSending] = useState(false);
   const [filter, setFilter] = useState<string>('active');
-  const [followupOpen, setFollowupOpen] = useState(false);
-  const [closeOpen, setCloseOpen] = useState(false);
   const [systemStatus, setSystemStatus] = useState<string>('checking');
   const [eventLimit, setEventLimit] = useState(8);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -153,6 +218,7 @@ function AgentWorkbench() {
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const composerStacked = input.split(/\r?\n/).length > 2 || input.length > 48 || imageUrls.length > 0;
+  const pendingStep = sending ? agentThinkingSteps[messages.length % agentThinkingSteps.length] : agentThinkingSteps[0];
   const { nodes, edges } = useMemo(
     () => buildStateMachineElements(activeStatus || null),
     [activeStatus],
@@ -238,44 +304,128 @@ function AgentWorkbench() {
   async function handleSend() {
     const text = input.trim();
     if (!text && imageUrls.length === 0) return;
-    const content = text || '已上传图片证据，请结合病例上下文判断。';
+    const content = text || '已上传图片，请分析这次番茄异常。';
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content,
       imageUrls,
     };
-    setMessages((current) => [...current, userMessage]);
+    const pendingId = crypto.randomUUID();
+    const pendingMessage: ChatMessage = {
+      id: pendingId,
+      role: 'agent',
+      content: '正在观察症状、检查安全约束，并生成处理和复查计划...',
+      pending: true,
+    };
+    setMessages((current) => [...current, userMessage, pendingMessage]);
     setInput('');
     setImageUrls([]);
     setSending(true);
     try {
+      const location = await getBrowserLocation();
       const result = await sendConversationMessage({
         user_id: userId,
         case_id: selectedCaseId,
         message: content,
         image_urls: imageUrls,
+        ...location,
       });
-      const agentMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'agent',
-        content: responseToMessage(result.response),
-        response: result.response,
-      };
-      setMessages((current) => [...current, agentMessage]);
       setSelectedCaseId(result.case_id);
-      await refreshCases();
-      await refreshDetail(result.case_id);
+      void refreshCases();
+      const detail = await getCase(result.case_id);
+      setCaseDetail(detail);
+      await streamAgentMessage(pendingId, responseToMessage(result.response), result.response);
     } catch (error) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === pendingId
+            ? {
+                ...item,
+                pending: false,
+                content: `这次 Agent 没有完成决策：${error instanceof Error ? error.message : '发送失败'}`,
+              }
+            : item,
+        ),
+      );
       message.error(error instanceof Error ? error.message : '发送失败');
     } finally {
       setSending(false);
     }
   }
 
+  async function getBrowserLocation(): Promise<{
+    latitude?: number | null;
+    longitude?: number | null;
+    location_label?: string | null;
+    location_source?: string | null;
+    location_error?: string | null;
+  }> {
+    if (!navigator.geolocation) {
+      return {
+        location_label: '用户未提供地点',
+        location_source: 'browser_unavailable',
+        location_error: '当前浏览器不支持定位',
+      };
+    }
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: false,
+          timeout: 8000,
+          maximumAge: 10 * 60 * 1000,
+        });
+      });
+      return {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        location_label: '浏览器定位',
+        location_source: 'browser',
+      };
+    } catch (error) {
+      const reason = geolocationErrorText(error);
+      return {
+        location_label: '用户未提供地点',
+        location_source: 'browser_failed',
+        location_error: reason,
+      };
+    }
+  }
+
+  async function streamAgentMessage(messageId: string, fullText: string, response: CaseResponse) {
+    const chunkSize = 8;
+    for (let index = 0; index < fullText.length; index += chunkSize) {
+      const next = fullText.slice(0, index + chunkSize);
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === messageId
+            ? {
+                ...item,
+                content: next,
+                pending: index + chunkSize < fullText.length,
+                response,
+              }
+            : item,
+        ),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 18));
+    }
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === messageId
+          ? {
+              ...item,
+              content: fullText,
+              pending: false,
+              response,
+            }
+          : item,
+      ),
+    );
+  }
+
   function handleNewConversation() {
-    sessionStorage.removeItem('tomatoAgentWorkbenchUserId');
-    setUserId(createDebugUserId());
+    setUserId(currentUser ? String(currentUser.id) : createDebugUserId());
     setSelectedCaseId(null);
     setCaseDetail(null);
     setMessages([
@@ -303,52 +453,6 @@ function AgentWorkbench() {
   function openPreview(url: string) {
     setPreviewImage(url);
     setPreviewScale(1);
-  }
-
-  async function handleFollowupSubmit(values: {
-    description: string;
-    has_new_spots?: boolean;
-    spots_expanded?: boolean;
-    spread_to_new_parts?: boolean;
-    fruit_affected?: boolean;
-  }) {
-    if (!selectedCaseId) return;
-    setSending(true);
-    try {
-      const result = await submitFollowup(selectedCaseId, values);
-      setMessages((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: 'user', content: values.description },
-        {
-          id: crypto.randomUUID(),
-          role: 'agent',
-          content: `${result.message}${result.trend ? `\n复查趋势：${result.trend}` : ''}`,
-        },
-      ]);
-      setFollowupOpen(false);
-      await refreshCases();
-      await refreshDetail(selectedCaseId);
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '复查提交失败');
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function handleCloseCase(values: { summary?: string }) {
-    if (!selectedCaseId) return;
-    setSending(true);
-    try {
-      await closeCase(selectedCaseId, values.summary);
-      setCloseOpen(false);
-      await refreshCases();
-      await refreshDetail(selectedCaseId);
-      message.success('病例已结案');
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '结案失败');
-    } finally {
-      setSending(false);
-    }
   }
 
   async function handleDownloadReport() {
@@ -462,7 +566,7 @@ function AgentWorkbench() {
                         {statusTag(item.status)}
                       </Space>
                       <Text type="secondary">
-                        #{item.id} · {item.suspected_problem || '待判断'} · {formatDate(item.followup_date)}
+                        {item.suspected_problem || '待判断'} · {formatDate(item.followup_date)}
                       </Text>
                     </Space>
                   </List.Item>
@@ -478,24 +582,10 @@ function AgentWorkbench() {
               <Space>
                 {statusTag(activeStatus || null)}
                 <Text type="secondary">
-                  {selectedCaseId ? `Case #${selectedCaseId}` : '尚未创建 Case'}
+                  {caseDetail?.title || (selectedCaseId ? '当前病例' : '尚未创建病例')}
                 </Text>
               </Space>
               <Space>
-                <Button
-                  icon={<CalendarOutlined />}
-                  disabled={!selectedCaseId}
-                  onClick={() => setFollowupOpen(true)}
-                >
-                  提交复查
-                </Button>
-                <Button
-                  icon={<CheckCircleOutlined />}
-                  disabled={!selectedCaseId || activeStatus === 'CLOSED'}
-                  onClick={() => setCloseOpen(true)}
-                >
-                  结案
-                </Button>
                 <Button
                   icon={<DownloadOutlined />}
                   disabled={!selectedCaseId}
@@ -508,9 +598,10 @@ function AgentWorkbench() {
 
             <div className="message-stream">
               {messages.map((item) => (
-                <div key={item.id} className={`chat-bubble ${item.role}`}>
+                <div key={item.id} className={`chat-bubble ${item.role}${item.pending ? ' pending' : ''}`}>
                   <div className="bubble-role">{item.role === 'user' ? '用户' : 'Agent'}</div>
                   <Paragraph>{item.content}</Paragraph>
+                  {item.pending ? <ThinkingIndicator label={pendingStep} /> : null}
                   {item.imageUrls?.length ? <ImageStrip urls={item.imageUrls} onPreview={openPreview} /> : null}
                 </div>
               ))}
@@ -540,7 +631,7 @@ function AgentWorkbench() {
                 <TextArea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
-                  placeholder="描述症状、回答追问，或说明复查变化..."
+                  placeholder="直接说你看到的情况、你的猜测，或这几天有没有变化..."
                   autoSize={{ minRows: 2, maxRows: 5 }}
                   onPressEnter={(event) => {
                     if (!event.shiftKey) {
@@ -572,12 +663,12 @@ function AgentWorkbench() {
                     <InfoLine label="疑似问题" value={caseDetail.suspected_problem || '-'} />
                     <InfoLine label="可信度" value={caseDetail.likelihood || '-'} />
                     <InfoLine label="部位" value={caseDetail.affected_parts.join('、') || '-'} />
-                    <InfoLine label="阶段" value={caseDetail.growth_stage || '-'} />
-                    <InfoLine label="环境" value={caseDetail.environment || '-'} />
-                    <InfoLine label="天气" value={caseDetail.recent_weather || '-'} />
+                    <InfoLine label="地点" value={environmentSummary(caseDetail).location} />
+                    <InfoLine label="天气" value={environmentSummary(caseDetail).weather} />
+                    <InfoLine label="阶段" value={stageSummary(caseDetail)} />
                     <InfoLine
                       label="采收"
-                      value={caseDetail.days_to_harvest != null ? `${caseDetail.days_to_harvest} 天` : '-'}
+                      value={harvestSummary(caseDetail)}
                     />
                     <InfoLine label="复查日期" value={formatDate(caseDetail.followup_date)} />
                     <ImageEvidence detail={caseDetail} onPreview={openPreview} />
@@ -610,6 +701,14 @@ function AgentWorkbench() {
                 </div>
               </Card>
 
+              <Card size="small" title={<PanelTitle icon={<SafetyCertificateOutlined />} text="Agent 运行轨迹" />}>
+                {caseDetail ? <AgentTracePanel detail={caseDetail} /> : <Empty description="暂无 Agent 轨迹" />}
+              </Card>
+
+              <Card size="small" title={<PanelTitle icon={<ReloadOutlined />} text="工具调用" />}>
+                {caseDetail ? <ToolCallPanel detail={caseDetail} /> : <Empty description="暂无工具调用" />}
+              </Card>
+
               <Card size="small" title={<PanelTitle icon={<ClockCircleOutlined />} text="复查与事件记忆" />}>
                 {caseDetail ? (
                   <Space direction="vertical" className="full-width" size={12}>
@@ -631,18 +730,6 @@ function AgentWorkbench() {
         </Sider>
       </Layout>
 
-      <FollowupModal
-        open={followupOpen}
-        loading={sending}
-        onCancel={() => setFollowupOpen(false)}
-        onSubmit={(values) => void handleFollowupSubmit(values)}
-      />
-      <CloseCaseModal
-        open={closeOpen}
-        loading={sending}
-        onCancel={() => setCloseOpen(false)}
-        onSubmit={(values) => void handleCloseCase(values)}
-      />
       <ImagePreview
         imageUrl={previewImage}
         scale={previewScale}
@@ -832,6 +919,7 @@ function LoginPage({
 
 function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
   const events = detail.events;
+  const hasAgentResponses = events.some((event) => event.event_type === 'AGENT_RESPONSE');
   const messagesFromEvents = events.flatMap((event, index): ChatMessage[] => {
     if (event.event_type === 'USER_MESSAGE') {
       const imageUrls = Array.isArray(event.structured_data.image_urls)
@@ -868,7 +956,7 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
       ];
     }
 
-    if (event.event_type === 'QUESTIONS_ASKED') {
+    if (!hasAgentResponses && event.event_type === 'QUESTIONS_ASKED') {
       const questions = Array.isArray(event.system_output.questions)
         ? (event.system_output.questions as string[])
         : [];
@@ -883,7 +971,7 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
       ];
     }
 
-    if (event.event_type === 'FOLLOWUP_COMPARED') {
+    if (!hasAgentResponses && event.event_type === 'FOLLOWUP_COMPARED') {
       return [
         {
           id: `event-${event.id}`,
@@ -1017,23 +1105,133 @@ function PendingImageStrip({
   );
 }
 
+function ThinkingIndicator({ label }: { label: string }) {
+  return (
+    <div className="thinking-indicator" aria-live="polite">
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+      <Text type="secondary">{label}</Text>
+    </div>
+  );
+}
+
 function ImageEvidence({ detail, onPreview }: { detail: CaseDetail; onPreview: (url: string) => void }) {
   const imageEvidence = Array.isArray(detail.structured_data.image_evidence)
     ? (detail.structured_data.image_evidence as string[])
     : [];
+  const vision = detail.structured_data.vision_observation as
+    | {
+        status?: string;
+        observed_parts?: string[];
+        visual_symptoms?: string[];
+        possible_problems?: string[];
+        severity_signals?: string[];
+        uncertainties?: string[];
+        confidence?: string;
+        model?: string;
+      }
+    | undefined;
+  const analysisStatus = String(detail.structured_data.image_analysis_status || vision?.status || 'pending');
+  const statusLabel: Record<string, string> = {
+    analyzed: '视觉识别已完成',
+    failed: '视觉识别调用失败',
+    not_configured: '视觉识别未配置',
+    not_supported: '当前模型不支持视觉识别',
+    pending: '等待视觉识别',
+  };
   if (!imageEvidence.length) return null;
   return (
     <Alert
-      type="info"
+      type={analysisStatus === 'analyzed' ? 'success' : analysisStatus === 'failed' ? 'warning' : 'info'}
       showIcon
-      message="图片证据已保存"
+      message={statusLabel[analysisStatus] || `图片分析状态：${analysisStatus}`}
       description={
         <Space direction="vertical" size={8} className="full-width">
-          <Text type="secondary">MVP 阶段尚未执行视觉识别，图片只作为 Case Event 和后续多模态工具的证据。</Text>
+          {vision ? (
+            <Space direction="vertical" size={4} className="full-width">
+              <Text type="secondary">
+                模型：{vision.model || '-'} · 置信度：{vision.confidence || '-'}
+              </Text>
+              <CompactList label="观察部位" values={vision.observed_parts} />
+              <CompactList label="可见症状" values={vision.visual_symptoms} />
+              <CompactList label="候选问题" values={vision.possible_problems} />
+              <CompactList label="严重线索" values={vision.severity_signals} />
+              <CompactList label="不确定点" values={vision.uncertainties} />
+            </Space>
+          ) : (
+            <Text type="secondary">图片已保存，等待视觉工具返回观察结果。</Text>
+          )}
           <ImageStrip urls={imageEvidence} onPreview={onPreview} />
         </Space>
       }
     />
+  );
+}
+
+function environmentSummary(detail: CaseDetail) {
+  const weather = detail.structured_data.weather_observation as
+    | {
+        location?: string;
+        location_source?: string;
+        location_error?: string | null;
+        status?: string;
+        provider?: string;
+        current_temperature_c?: number | null;
+        current_relative_humidity?: number | null;
+        current_precipitation_mm?: number | null;
+        risk_signals?: string[];
+        uncertainties?: string[];
+        requires_confirmation?: boolean;
+      }
+    | undefined;
+  if (!weather) {
+    return {
+      location: '-',
+      weather: detail.recent_weather || '-',
+    };
+  }
+
+  const metrics = [
+    weather.current_temperature_c != null ? `${weather.current_temperature_c}℃` : null,
+    weather.current_relative_humidity != null ? `湿度 ${weather.current_relative_humidity}%` : null,
+    weather.current_precipitation_mm != null ? `降水 ${weather.current_precipitation_mm}mm` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  const weatherText =
+    metrics ||
+    weather.risk_signals?.slice(0, 2).join('；') ||
+    weather.uncertainties?.slice(0, 1).join('；') ||
+    detail.recent_weather ||
+    String(weather.status || '-');
+  return {
+    location: weather.location ? `${weather.location}（${weather.location_source || '未知来源'}）` : '-',
+    weather: weatherText,
+  };
+}
+
+function stageSummary(detail: CaseDetail) {
+  const vision = detail.structured_data.vision_observation as { raw_text?: string | null } | undefined;
+  const source = vision?.raw_text ? '视觉/上下文推断' : '用户/上下文';
+  return detail.growth_stage ? `${detail.growth_stage}（${source}）` : '待识别，可直接纠正';
+}
+
+function harvestSummary(detail: CaseDetail) {
+  const vision = detail.structured_data.vision_observation as { harvest_hint?: string | null } | undefined;
+  if (detail.days_to_harvest == null && vision?.harvest_hint) return `${vision.harvest_hint}（视觉/上下文推断）`;
+  if (detail.days_to_harvest == null) return '待识别，可直接纠正';
+  if (vision?.harvest_hint) return `${detail.days_to_harvest} 天（视觉提示：${vision.harvest_hint}）`;
+  return `${detail.days_to_harvest} 天（视觉/日期/上下文推断）`;
+}
+
+function CompactList({ label, values }: { label: string; values?: string[] }) {
+  if (!values?.length) return null;
+  return (
+    <Text type="secondary">
+      {label}：{values.slice(0, 4).join('、')}
+    </Text>
   );
 }
 
@@ -1100,10 +1298,22 @@ function ReminderModal({
             <Space direction="vertical" size={4} className="full-width">
               <Space>
                 <Tag color={item.status === 'pending' ? 'blue' : 'default'}>{item.status}</Tag>
-                <Text strong>Case #{item.case_id}</Text>
+                <Text strong>复查提醒</Text>
                 <Text type="secondary">{dayjs(item.due_at).format('YYYY-MM-DD HH:mm')}</Text>
               </Space>
               <Text type="secondary">{item.reason || '系统提醒复查番茄异常处置效果'}</Text>
+              <Space size={8}>
+                {item.calendar_url ? (
+                  <Button size="small" href={item.calendar_url} target="_blank">
+                    加入 Google 日历
+                  </Button>
+                ) : null}
+                {item.ics_url ? (
+                  <Button size="small" href={apiUrl(item.ics_url)} target="_blank">
+                    下载 ICS
+                  </Button>
+                ) : null}
+              </Space>
             </Space>
           </List.Item>
         )}
@@ -1131,6 +1341,155 @@ function FollowupSummary({ detail }: { detail: CaseDetail }) {
   );
 }
 
+function AgentTracePanel({ detail }: { detail: CaseDetail }) {
+  const decisionEvent = [...detail.events].reverse().find((event) => event.event_type === 'AGENT_DECISION');
+  const trace = decisionEvent?.system_output.trace as AgentTrace | undefined;
+  if (!trace) return <Empty description="暂无 Agent 决策轨迹" />;
+
+  const observe = trace.observe || {};
+  const decide = trace.decide || {};
+  const act = trace.act || {};
+  const guard = trace.guard || {};
+  const memory = trace.memory || {};
+
+  return (
+    <Space direction="vertical" size={10} className="full-width agent-trace">
+      <div className="trace-row">
+        <Text strong>Observe</Text>
+        <Space wrap size={4}>
+          <Tag>{String(observe.case_status || '-')}</Tag>
+          {observe.vision_status ? <Tag color="cyan">Vision {String(observe.vision_status)}</Tag> : null}
+          {observe.active_followup ? <Tag color="purple">Follow-up</Tag> : null}
+        </Space>
+      </div>
+      <TraceList label="观察依据" values={decide.observations_used} />
+
+      <div className="trace-row">
+        <Text strong>Decide</Text>
+        <Space wrap size={4}>
+          <Tag color={String(decide.source || '').startsWith('llm') ? 'green' : 'gold'}>
+            {String(decide.source || 'rule')}
+          </Tag>
+          <Tag color="blue">{String(decide.next_action || '-')}</Tag>
+          {decide.requested_state ? <Tag>{decide.requested_state}</Tag> : null}
+          {decide.confidence ? <Tag>{decide.confidence}</Tag> : null}
+          {decide.user_intent ? <Tag color="geekblue">{decide.user_intent}</Tag> : null}
+        </Space>
+      </div>
+      {decide.reason ? <Text type="secondary">{decide.reason}</Text> : null}
+      {decide.fallback_reason ? <Alert type="warning" showIcon message={decide.fallback_reason} /> : null}
+
+      <TraceList label="本轮回答焦点" values={decide.response_focus} />
+      <TraceList label="Act 工具计划" values={act.planned_tools} />
+      <TraceList label="Guard 约束" values={guard.guardrails} />
+      <TraceList label="Memory 写入" values={memory.will_write_events} />
+    </Space>
+  );
+}
+
+function TraceList({ label, values }: { label: string; values?: string[] }) {
+  if (!values?.length) return null;
+  return (
+    <Space direction="vertical" size={4} className="full-width">
+      <Text strong>{label}</Text>
+      <div className="trace-tags">
+        {values.slice(0, 8).map((item, index) => (
+          <Tag key={`${item}-${index}`}>{item}</Tag>
+        ))}
+      </div>
+    </Space>
+  );
+}
+
+function ToolCallPanel({ detail }: { detail: CaseDetail }) {
+  const toolEvents = detail.events
+    .filter((event) => event.event_type === 'TOOL_CALLED')
+    .slice(-10)
+    .reverse();
+
+  if (!toolEvents.length) return <Empty description="暂无工具调用记录" />;
+
+  return (
+    <Space direction="vertical" size={8} className="full-width tool-call-panel">
+      {toolEvents.map((event) => {
+        const tool = String(event.system_output.tool || '-');
+        const ok = event.system_output.ok !== false;
+        const output = event.system_output.output as Record<string, unknown> | undefined;
+        return (
+          <div className="tool-call-row" key={event.id}>
+            <Space wrap size={4}>
+              <Tag color={ok ? toolColor(tool) : 'red'}>{tool}</Tag>
+              <Text type="secondary">{dayjs(event.created_at).format('MM-DD HH:mm')}</Text>
+            </Space>
+            <Text type="secondary">{toolSummary(tool, output)}</Text>
+            {tool === 'CalendarReminderTool' && output ? (
+              <Space size={8} className="calendar-actions">
+                {typeof output.calendar_url === 'string' ? (
+                  <Button size="small" href={output.calendar_url} target="_blank">
+                    加入 Google 日历
+                  </Button>
+                ) : null}
+                {typeof output.ics_url === 'string' ? (
+                  <Button size="small" href={apiUrl(output.ics_url)} target="_blank">
+                    下载 ICS
+                  </Button>
+                ) : null}
+              </Space>
+            ) : null}
+          </div>
+        );
+      })}
+    </Space>
+  );
+}
+
+function toolColor(tool: string) {
+  if (tool.includes('Date')) return 'blue';
+  if (tool.includes('Location')) return 'lime';
+  if (tool.includes('Weather')) return 'cyan';
+  if (tool.includes('Calendar') || tool.includes('Reminder')) return 'purple';
+  if (tool.includes('Safety')) return 'green';
+  if (tool.includes('Vision')) return 'magenta';
+  return 'default';
+}
+
+function toolSummary(tool: string, output?: Record<string, unknown>) {
+  if (!output) return '已调用，暂无可展示输出';
+  if (tool === 'DateTool') {
+    return `当前日期：${String(output.today || '-')} · 时区：${String(output.timezone || '-')}`;
+  }
+  if (tool === 'LocationTool') {
+    const error = output.location_error ? ` · ${String(output.location_error)}` : '';
+    return `地点：${String(output.location || '-')} · 来源：${String(output.location_source || '-')}${error}`;
+  }
+  if (tool === 'WeatherTool') {
+    const signals = Array.isArray(output.risk_signals) ? output.risk_signals.join('；') : '';
+    const uncertainties = Array.isArray(output.uncertainties) ? output.uncertainties.join('；') : '';
+    const weather = [
+      output.current_temperature_c != null ? `${String(output.current_temperature_c)}℃` : null,
+      output.current_relative_humidity != null ? `湿度 ${String(output.current_relative_humidity)}%` : null,
+      output.current_precipitation_mm != null ? `降水 ${String(output.current_precipitation_mm)}mm` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    return `地点：${String(output.location || '-')} · 来源：${String(output.location_source || '-')} · ${weather || String(output.status || '-')} · ${signals || uncertainties || '未发现明显天气风险信号'}`;
+  }
+  if (tool === 'CalendarReminderTool') {
+    return `复查：${String(output.due_date || '-')} · ${String(output.mode || '-')} · ${String(output.channel || '-')}`;
+  }
+  if (tool === 'SafetyChecker') {
+    return `风险：${String(output.risk_level || '-')} · ${Array.isArray(output.warnings) ? output.warnings.slice(0, 2).join('；') : ''}`;
+  }
+  if (tool === 'VisionTool') {
+    const problems = Array.isArray(output.possible_problems) ? output.possible_problems.join('、') : '';
+    return `状态：${String(output.status || '-')} · 候选：${problems || '-'}`;
+  }
+  if (tool === 'ResponseComposer') {
+    return '已将结构化结果整理为用户可读回复';
+  }
+  return '已调用并写入事件记忆';
+}
+
 function EventTimeline({ detail, limit }: { detail: CaseDetail; limit: number }) {
   const items = detail.events.slice(-limit).reverse().map((event) => ({
     color: event.event_type === 'STATE_CHANGED' ? 'green' : 'blue',
@@ -1138,6 +1497,9 @@ function EventTimeline({ detail, limit }: { detail: CaseDetail; limit: number })
       <Space direction="vertical" size={2}>
         <Space>
           <Text strong>{event.event_type}</Text>
+          {event.event_type === 'TOOL_CALLED' && event.system_output.tool ? (
+            <Tag color={event.system_output.ok === false ? 'red' : 'cyan'}>{String(event.system_output.tool)}</Tag>
+          ) : null}
           <Text type="secondary">{dayjs(event.created_at).format('MM-DD HH:mm')}</Text>
         </Space>
         {event.user_input ? <Text type="secondary">{event.user_input}</Text> : null}
@@ -1145,97 +1507,6 @@ function EventTimeline({ detail, limit }: { detail: CaseDetail; limit: number })
     ),
   }));
   return <Timeline items={items} />;
-}
-
-function FollowupModal({
-  open,
-  loading,
-  onCancel,
-  onSubmit,
-}: {
-  open: boolean;
-  loading: boolean;
-  onCancel: () => void;
-  onSubmit: (values: {
-    description: string;
-    has_new_spots?: boolean;
-    spots_expanded?: boolean;
-    spread_to_new_parts?: boolean;
-    fruit_affected?: boolean;
-  }) => void;
-}) {
-  const [form] = Form.useForm();
-  return (
-    <Modal
-      title="提交复查"
-      open={open}
-      onCancel={onCancel}
-      confirmLoading={loading}
-      onOk={() => form.submit()}
-      okText="提交"
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          has_new_spots: false,
-          spots_expanded: false,
-          spread_to_new_parts: false,
-          fruit_affected: false,
-        }}
-        onFinish={(values) => {
-          onSubmit(values);
-          form.resetFields();
-        }}
-      >
-        <Form.Item name="description" label="复查描述" rules={[{ required: true, message: '请填写复查描述' }]}>
-          <TextArea rows={4} placeholder="例如：病斑没有增加，老叶略有干枯，新叶正常。" />
-        </Form.Item>
-        <Form.Item name="has_new_spots" label="是否出现新病斑">
-          <Segmented options={[{ label: '否', value: false }, { label: '是', value: true }]} />
-        </Form.Item>
-        <Form.Item name="spots_expanded" label="原有病斑是否扩大">
-          <Segmented options={[{ label: '否', value: false }, { label: '是', value: true }]} />
-        </Form.Item>
-        <Form.Item name="spread_to_new_parts" label="是否扩展到新部位">
-          <Segmented options={[{ label: '否', value: false }, { label: '是', value: true }]} />
-        </Form.Item>
-        <Form.Item name="fruit_affected" label="果实是否受影响">
-          <Segmented options={[{ label: '否', value: false }, { label: '是', value: true }]} />
-        </Form.Item>
-      </Form>
-    </Modal>
-  );
-}
-
-function CloseCaseModal({
-  open,
-  loading,
-  onCancel,
-  onSubmit,
-}: {
-  open: boolean;
-  loading: boolean;
-  onCancel: () => void;
-  onSubmit: (values: { summary?: string }) => void;
-}) {
-  const [form] = Form.useForm();
-  return (
-    <Modal
-      title="结案确认"
-      open={open}
-      onCancel={onCancel}
-      confirmLoading={loading}
-      onOk={() => form.submit()}
-      okText="结案"
-    >
-      <Form form={form} layout="vertical" onFinish={onSubmit}>
-        <Form.Item name="summary" label="结案备注">
-          <TextArea rows={3} placeholder="例如：症状稳定，没有新病斑，暂时结案。" />
-        </Form.Item>
-      </Form>
-    </Modal>
-  );
 }
 
 createRoot(document.getElementById('root')!).render(

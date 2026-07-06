@@ -19,11 +19,21 @@ class CreateCaseInput(BaseModel):
     recent_pesticide_use: str | None = None
     days_to_harvest: int | None = None
     image_urls: list[str] = Field(default_factory=list)
+    latitude: float | None = None
+    longitude: float | None = None
+    location_label: str | None = None
+    location_source: str | None = None
+    location_error: str | None = None
 
 
 class ReplyInput(BaseModel):
     message: str
     image_urls: list[str] = Field(default_factory=list)
+    latitude: float | None = None
+    longitude: float | None = None
+    location_label: str | None = None
+    location_source: str | None = None
+    location_error: str | None = None
 
 
 class FollowupInput(BaseModel):
@@ -68,6 +78,13 @@ class AgentDecisionRead(BaseModel):
     confidence: str = "medium"
     requested_state: CaseStatus | None = None
     questions: list[str] = Field(default_factory=list)
+    decision_source: str = "rule"
+    observations_used: list[str] = Field(default_factory=list)
+    tool_plan: list[str] = Field(default_factory=list)
+    user_intent: str = "initial_diagnosis"
+    response_focus: list[str] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
 
 
 class SafetyResultRead(BaseModel):
@@ -93,6 +110,24 @@ class PlanRead(BaseModel):
     followup_after_days: int | None = None
 
 
+class ClosedLoopAdvice(BaseModel):
+    information_sufficient: bool
+    problem_category: str | None = None
+    severity: str
+    action_mode: str
+    chemical_advice: str
+    harvest_safety: str
+    plain_summary: str
+    immediate_actions: list[str] = Field(default_factory=list)
+    observation_points: list[str] = Field(default_factory=list)
+    escalation_conditions: list[str] = Field(default_factory=list)
+    followup_timing: str | None = None
+    followup_if_better: list[str] = Field(default_factory=list)
+    followup_if_worse: list[str] = Field(default_factory=list)
+    process_record: list[str] = Field(default_factory=list)
+    environment_confirmation: str | None = None
+
+
 class CaseResponse(BaseModel):
     case_id: int
     status: CaseStatus
@@ -104,6 +139,7 @@ class CaseResponse(BaseModel):
     safety: SafetyResultRead | None = None
     followup: FollowupRead | None = None
     trend: FollowupTrend | None = None
+    advice: ClosedLoopAdvice | None = None
 
 
 class CaseListItem(BaseModel):

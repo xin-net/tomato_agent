@@ -18,15 +18,16 @@ class ConversationService:
         created_case = False
 
         if case_id is None:
-            active_case = self.cases.latest_active_for_user(data.user_id)
-            case_id = active_case.id if active_case else None
-
-        if case_id is None:
             response = self.orchestrator.create_case(
                 CreateCaseInput(
                     user_id=data.user_id,
                     symptoms=data.message,
                     image_urls=data.image_urls,
+                    latitude=data.latitude,
+                    longitude=data.longitude,
+                    location_label=data.location_label,
+                    location_source=data.location_source,
+                    location_error=data.location_error,
                 )
             )
             created_case = True
@@ -38,6 +39,11 @@ class ConversationService:
                         user_id=data.user_id,
                         symptoms=data.message,
                         image_urls=data.image_urls,
+                        latitude=data.latitude,
+                        longitude=data.longitude,
+                        location_label=data.location_label,
+                        location_source=data.location_source,
+                        location_error=data.location_error,
                     )
                 )
                 created_case = True
@@ -47,13 +53,26 @@ class ConversationService:
                         user_id=data.user_id,
                         symptoms=data.message,
                         image_urls=data.image_urls,
+                        latitude=data.latitude,
+                        longitude=data.longitude,
+                        location_label=data.location_label,
+                        location_source=data.location_source,
+                        location_error=data.location_error,
                     )
                 )
                 created_case = True
             else:
                 response = self.orchestrator.reply_to_case(
                     case_id,
-                    ReplyInput(message=data.message, image_urls=data.image_urls),
+                    ReplyInput(
+                        message=data.message,
+                        image_urls=data.image_urls,
+                        latitude=data.latitude,
+                        longitude=data.longitude,
+                        location_label=data.location_label,
+                        location_source=data.location_source,
+                        location_error=data.location_error,
+                    ),
                 )
 
         return ConversationMessageResponse(

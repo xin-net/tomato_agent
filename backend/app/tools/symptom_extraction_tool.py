@@ -29,7 +29,23 @@ class SymptomExtractionTool:
         "底部发黑",
         "萎蔫",
         "扩散",
+        "白色飞虫",
     ]
+
+    problem_keywords = {
+        "白粉虱": "白粉虱",
+        "粉白虱": "白粉虱",
+        "早疫病": "番茄早疫病",
+        "晚疫病": "番茄晚疫病",
+        "叶霉病": "番茄叶霉病",
+        "灰霉病": "番茄灰霉病",
+        "蚜虫": "蚜虫",
+        "红蜘蛛": "红蜘蛛",
+        "脐腐病": "脐腐病",
+        "缺镁": "缺镁黄化",
+        "肥害": "肥害或药害",
+        "药害": "肥害或药害",
+    }
 
     def extract(self, text: str, base: dict | None = None) -> StructuredSymptoms:
         raw = dict(base or {})
@@ -49,6 +65,19 @@ class SymptomExtractionTool:
             possible_categories.append("病害")
         if any(word in text for word in ["底部发黑", "浇水"]):
             possible_categories.append("生理性问题")
+
+        mentioned_problems = []
+        for keyword, problem in self.problem_keywords.items():
+            if keyword in text and problem not in mentioned_problems:
+                mentioned_problems.append(problem)
+        if (
+            any(word in text for word in ["小白虫", "白色飞虫", "飞虫"])
+            and "蚜虫" not in text
+            and "白粉虱" not in mentioned_problems
+        ):
+            mentioned_problems.append("白粉虱")
+        if mentioned_problems:
+            raw["mentioned_problems"] = mentioned_problems
 
         missing_fields = []
         if not affected_parts:
@@ -77,6 +106,12 @@ class SymptomExtractionTool:
         recent_weather = self._extract_recent_weather(text)
         if recent_weather:
             raw["recent_weather"] = recent_weather
+            raw["weather_source"] = "user_explicit"
+
+        location_text = self._extract_location_text(text)
+        if location_text:
+            raw["location_text"] = location_text
+            raw["location_source"] = "user_explicit"
 
         environment = self._extract_environment(text)
         if environment:
@@ -121,8 +156,40 @@ class SymptomExtractionTool:
 
     def _extract_recent_weather(self, text: str) -> str | None:
         weather_keywords = ["连续阴雨", "阴雨", "高湿", "潮湿", "降雨", "下雨", "低温", "高温", "闷热"]
-        found = [keyword for keyword in weather_keywords if keyword in text]
+        found = []
+        for keyword in weather_keywords:
+            if keyword not in text:
+                continue
+            if any(keyword in existing for existing in found):
+                continue
+            found.append(keyword)
         return "、".join(found) if found else None
+
+    def _extract_location_text(self, text: str) -> str | None:
+        patterns = [
+            r"(?:位于|地点是|种在|种植在|种植地点是|朋友在|帮.*?问.*?在)\s*([\u4e00-\u9fa5]{2,12}(?:省|市|县|区|镇|乡|村|附近)?)",
+            r"(?:在)\s*([\u4e00-\u9fa5]{2,12}(?:省|市|县|区|镇|乡|村|附近))",
+            r"([\u4e00-\u9fa5]{2,8}(?:省|市|县|区|镇|乡|村))\s*(?:的)?(?:番茄|棚|大棚|露地|阳台|地里)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                location = match.group(1).strip("，。；、 ")
+                location = self._normalize_location_text(location)
+                if location and location not in {"这里", "那边", "朋友", "别人"}:
+                    return location
+        return None
+
+    def _normalize_location_text(self, location: str) -> str:
+        for suffix in ["省", "市", "县", "区", "镇", "乡", "村"]:
+            index = location.find(suffix)
+            if index >= 1:
+                return location[: index + 1]
+        for marker in ["的", "大棚", "露地", "阳台", "番茄", "地里"]:
+            index = location.find(marker)
+            if index >= 2:
+                return location[:index]
+        return location
 
     def _extract_environment(self, text: str) -> str | None:
         if "温室" in text or "大棚" in text:

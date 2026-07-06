@@ -45,6 +45,9 @@ def test_workbench_flow_creates_case_submits_followup_and_reads_detail(db_sessio
         created_body = created.json()
         assert created_body["created_case"] is True
         assert created_body["response"]["status"] == "FOLLOWUP_PENDING"
+        assert created_body["response"]["advice"]["information_sufficient"] is True
+        assert created_body["response"]["advice"]["immediate_actions"]
+        assert created_body["response"]["advice"]["followup_if_worse"]
 
         case_id = created_body["case_id"]
         followup = client.post(
@@ -79,8 +82,36 @@ def test_workbench_flow_creates_case_submits_followup_and_reads_detail(db_sessio
 
         report = client.get(f"/api/cases/{case_id}/report", headers=headers)
         assert report.status_code == 200
-        assert f"Tomato Case #{case_id}" in report.text
+        assert "# 番茄病例报告" in report.text
         assert "事件时间线" in report.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_conversation_without_case_id_creates_new_case_for_authenticated_user(db_session):
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    try:
+        headers = auth_headers(client)
+        first = client.post(
+            "/api/conversation/messages",
+            headers=headers,
+            json={"message": "我的番茄叶子发黄，还有一些斑点，怎么办？"},
+        )
+        second = client.post(
+            "/api/conversation/messages",
+            headers=headers,
+            json={"message": "新对话：这张图帮我重新看一下。"},
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["created_case"] is True
+        assert second.json()["created_case"] is True
+        assert second.json()["case_id"] != first.json()["case_id"]
     finally:
         app.dependency_overrides.clear()
 

@@ -19,6 +19,10 @@ class AgentDecisionContext(BaseModel):
     case_status: CaseStatus
     latest_user_message: str
     structured_symptoms: StructuredSymptoms
+    vision_observation: dict[str, Any] | None = None
+    multimodal_observation: dict[str, Any] | None = None
+    weather_observation: dict[str, Any] | None = None
+    date_observation: dict[str, Any] | None = None
     active_followup: dict[str, Any] | None = None
     history_summary: list[dict[str, Any]] = Field(default_factory=list)
     available_actions: list[AgentAction]
@@ -30,3 +34,10 @@ class AgentDecision(BaseModel):
     confidence: str = "medium"
     requested_state: CaseStatus | None = None
     questions: list[str] = Field(default_factory=list)
+    decision_source: str = "rule"
+    observations_used: list[str] = Field(default_factory=list)
+    tool_plan: list[str] = Field(default_factory=list)
+    user_intent: str = "initial_diagnosis"
+    response_focus: list[str] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None

@@ -5,18 +5,20 @@ from app.schemas.cases import FollowupInput
 class FollowupCompareTool:
     def compare(self, data: FollowupInput) -> tuple[FollowupTrend, list[str]]:
         evidence: list[str] = []
+        improving_text = any(
+            word in data.description
+            for word in ["没有新的", "没有增加", "无新增", "未新增", "稳定", "好多了", "好转", "少了", "减少"]
+        )
         worsening_signals = [
             data.has_new_spots is True,
             data.spots_expanded is True,
             data.spread_to_new_parts is True,
             data.fruit_affected is True,
-            any(word in data.description for word in ["变多", "扩散", "上部", "更严重", "果实"]),
+            (not improving_text)
+            and any(word in data.description for word in ["变多", "更多", "增加", "长了", "扩散", "上部", "更严重", "果实"]),
         ]
         improving_signals = [
-            any(
-                word in data.description
-                for word in ["没有新的", "没有增加", "无新增", "未新增", "稳定", "好多了", "好转"]
-            ),
+            improving_text,
             data.has_new_spots is False,
             data.spots_expanded is False,
             data.spread_to_new_parts is False,

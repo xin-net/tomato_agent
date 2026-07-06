@@ -29,6 +29,8 @@ export interface AgentDecision {
   confidence: string;
   requested_state?: CaseStatus | null;
   questions: string[];
+  user_intent?: string;
+  response_focus?: string[];
 }
 
 export interface Diagnosis {
@@ -45,6 +47,24 @@ export interface HandlingPlan {
   escalation_conditions: string[];
   safety_warnings: string[];
   followup_after_days?: number | null;
+}
+
+export interface ClosedLoopAdvice {
+  information_sufficient: boolean;
+  problem_category?: string | null;
+  severity: string;
+  action_mode: string;
+  chemical_advice: string;
+  harvest_safety: string;
+  plain_summary: string;
+  immediate_actions: string[];
+  observation_points: string[];
+  escalation_conditions: string[];
+  followup_timing?: string | null;
+  followup_if_better: string[];
+  followup_if_worse: string[];
+  process_record: string[];
+  environment_confirmation?: string | null;
 }
 
 export interface SafetyResult {
@@ -75,6 +95,7 @@ export interface CaseResponse {
   safety?: SafetyResult | null;
   followup?: Followup | null;
   trend?: FollowupTrend | null;
+  advice?: ClosedLoopAdvice | null;
 }
 
 export interface ConversationMessageResponse {
@@ -103,6 +124,31 @@ export interface CaseEvent {
   created_at: string;
 }
 
+export interface AgentTrace {
+  observe?: Record<string, unknown>;
+  decide?: {
+    source?: string;
+    next_action?: string;
+    requested_state?: string | null;
+    confidence?: string;
+    reason?: string;
+    fallback_reason?: string | null;
+    observations_used?: string[];
+    user_intent?: string;
+    response_focus?: string[];
+  };
+  act?: {
+    planned_tools?: string[];
+    questions?: string[];
+  };
+  guard?: {
+    guardrails?: string[];
+  };
+  memory?: {
+    will_write_events?: string[];
+  };
+}
+
 export interface CaseDetail extends CaseListItem {
   user_id?: string | null;
   environment?: string | null;
@@ -127,6 +173,7 @@ export interface ChatMessage {
   content: string;
   imageUrls?: string[];
   response?: CaseResponse;
+  pending?: boolean;
 }
 
 export interface User {
@@ -150,6 +197,8 @@ export interface Reminder {
   channel: string;
   status: string;
   reason?: string | null;
+  calendar_url?: string | null;
+  ics_url?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -538,7 +538,7 @@
       function renderResponse(payload) {
         const response = payload.response;
         currentCaseId = payload.case_id;
-        $("casePill").textContent = `Case #${currentCaseId}`;
+        $("casePill").textContent = "当前病例";
         $("caseId").textContent = currentCaseId;
         $("caseStatus").textContent = response.status;
         renderStateMachine(response.status);

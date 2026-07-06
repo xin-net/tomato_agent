@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
 from app.core.auth import get_current_user
 from app.core.config import get_settings
@@ -49,7 +50,13 @@ if (FRONTEND_DIST_DIR / "assets").exists():
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except OperationalError as exc:
+        raise RuntimeError(
+            "数据库连接失败。请确认 PostgreSQL 已启动，并且 backend/.env 中的 DATABASE_URL 可访问。"
+            "本项目 Docker 容器通常可用：docker start tomato-agent-postgres"
+        ) from exc
 
 
 @app.get("/health")
@@ -280,7 +287,7 @@ def case_report(
     return PlainTextResponse(
         report,
         headers={
-            "Content-Disposition": f'attachment; filename="tomato-case-{case.id}.md"',
+            "Content-Disposition": 'attachment; filename="tomato-case-report.md"',
         },
     )
 
@@ -299,7 +306,7 @@ def list_reminders(
         user_case_ids=[case.id for case in cases] if current_user.role != "admin" else None,
         status=status,
     )
-    return [ReminderRead.model_validate(reminder) for reminder in reminders]
+    return [_reminder_read(reminder) for reminder in reminders]
 
 
 @app.get("/api/reminders/due", response_model=list[ReminderRead])
@@ -314,7 +321,7 @@ def due_reminders(
     reminders = ReminderRepository(db).due(
         user_case_ids=[case.id for case in cases] if current_user.role != "admin" else None,
     )
-    return [ReminderRead.model_validate(reminder) for reminder in reminders]
+    return [_reminder_read(reminder) for reminder in reminders]
 
 
 @app.post("/api/reminders", response_model=ReminderRead)
@@ -326,7 +333,7 @@ def create_reminder(
     _require_case_access(data.case_id, db, current_user)
     reminder = ReminderRepository(db).create(data)
     db.commit()
-    return ReminderRead.model_validate(reminder)
+    return _reminder_read(reminder)
 
 
 @app.patch("/api/reminders/{reminder_id}", response_model=ReminderRead)
@@ -343,12 +350,77 @@ def update_reminder(
     _require_case_access(reminder.case_id, db, current_user)
     updated = reminders.update(reminder, data)
     db.commit()
-    return ReminderRead.model_validate(updated)
+    return _reminder_read(updated)
+
+
+@app.get("/api/reminders/{reminder_id}/ics", response_class=PlainTextResponse)
+def reminder_ics(
+    reminder_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlainTextResponse:
+    reminder = ReminderRepository(db).get(reminder_id)
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    _require_case_access(reminder.case_id, db, current_user)
+    ics = _build_reminder_ics(reminder)
+    return PlainTextResponse(
+        ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="tomato-reminder-{reminder.id}.ics"'},
+    )
+
+
+def _reminder_read(reminder) -> ReminderRead:
+    item = ReminderRead.model_validate(reminder)
+    item.calendar_url = _google_calendar_url(reminder.due_at, reminder.reason or "番茄病例复查提醒")
+    item.ics_url = f"/api/reminders/{reminder.id}/ics"
+    return item
+
+
+def _google_calendar_url(due_at, reason: str) -> str:
+    from urllib.parse import urlencode
+
+    start = due_at.strftime("%Y%m%dT%H%M%S")
+    end = due_at.replace(hour=min(due_at.hour + 1, 23)).strftime("%Y%m%dT%H%M%S")
+    query = urlencode(
+        {
+            "action": "TEMPLATE",
+            "text": "番茄病例复查提醒",
+            "dates": f"{start}/{end}",
+            "details": reason,
+        }
+    )
+    return f"https://calendar.google.com/calendar/render?{query}"
+
+
+def _build_reminder_ics(reminder) -> str:
+    due = reminder.due_at.strftime("%Y%m%dT%H%M%S")
+    end = reminder.due_at.replace(hour=min(reminder.due_at.hour + 1, 23)).strftime("%Y%m%dT%H%M%S")
+    uid = f"tomato-agent-reminder-{reminder.id}@tomato-agent.local"
+    summary = "番茄病例复查提醒"
+    description = (reminder.reason or "请复查番茄异常处置效果").replace("\n", "\\n")
+    return "\n".join(
+        [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//Tomato Case Agent//Reminder//CN",
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTART:{due}",
+            f"DTEND:{end}",
+            f"SUMMARY:{summary}",
+            f"DESCRIPTION:{description}",
+            "END:VEVENT",
+            "END:VCALENDAR",
+            "",
+        ]
+    )
 
 
 def _build_case_report(case) -> str:
     lines = [
-        f"# Tomato Case #{case.id}",
+        "# 番茄病例报告",
         "",
         "## 基本信息",
         "",

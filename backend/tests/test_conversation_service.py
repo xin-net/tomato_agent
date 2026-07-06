@@ -15,7 +15,7 @@ def test_conversation_message_creates_case_when_no_active_case_exists(db_session
     assert response.response.response_type == "questions"
 
 
-def test_conversation_message_continues_latest_active_case(db_session):
+def test_conversation_message_without_case_id_starts_new_case(db_session):
     service = ConversationService(db_session)
     first = service.handle_message(
         ConversationMessageInput(user_id="u1", message="我的番茄叶子发黄，还有一些斑点，怎么办？")
@@ -24,6 +24,24 @@ def test_conversation_message_continues_latest_active_case(db_session):
     second = service.handle_message(
         ConversationMessageInput(
             user_id="u1",
+            message="主要是下部老叶，有褐色斑点，有同心轮纹，现在结果期，距离采收大概 10 天。",
+        )
+    )
+
+    assert second.created_case is True
+    assert second.case_id != first.case_id
+
+
+def test_conversation_message_continues_explicit_case(db_session):
+    service = ConversationService(db_session)
+    first = service.handle_message(
+        ConversationMessageInput(user_id="u1", message="我的番茄叶子发黄，还有一些斑点，怎么办？")
+    )
+
+    second = service.handle_message(
+        ConversationMessageInput(
+            user_id="u1",
+            case_id=first.case_id,
             message="主要是下部老叶，有褐色斑点，有同心轮纹，现在结果期，距离采收大概 10 天。",
         )
     )

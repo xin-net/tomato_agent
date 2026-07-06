@@ -20,7 +20,12 @@ class StateMachine:
             CaseStatus.ESCALATED,
         },
         CaseStatus.DIAGNOSED: {CaseStatus.FOLLOWUP_PENDING, CaseStatus.ESCALATED},
-        CaseStatus.FOLLOWUP_PENDING: {CaseStatus.FOLLOWUP_REVIEW, CaseStatus.ESCALATED},
+        CaseStatus.FOLLOWUP_PENDING: {
+            CaseStatus.NEED_MORE_INFO,
+            CaseStatus.FOLLOWUP_PENDING,
+            CaseStatus.FOLLOWUP_REVIEW,
+            CaseStatus.ESCALATED,
+        },
         CaseStatus.FOLLOWUP_REVIEW: {
             CaseStatus.IMPROVING,
             CaseStatus.WORSENING,

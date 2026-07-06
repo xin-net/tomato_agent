@@ -19,6 +19,8 @@ class ReminderRead(BaseModel):
     channel: str
     status: str
     reason: str | None = None
+    calendar_url: str | None = None
+    ics_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

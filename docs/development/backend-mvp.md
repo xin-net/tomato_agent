@@ -1,4 +1,6 @@
-# 后端 MVP 开发说明
+# 后端开发说明
+
+MVP 阶段的病例闭环已经完成。当前开发重点是向完整版 Agent 演进：扩展感知工具、强化可调整复查、接入外部日历/通知、增强知识库和保持 LLM 主导决策下的确定性安全边界。
 
 ## 当前架构
 
@@ -9,7 +11,7 @@
 其中：
 
 - `CaseOrchestrator`：病例编排器，负责把用户输入、工具观察、状态机、事件记忆和复查任务串起来。
-- `AgentDecisionEngine`：当前为规则版决策器，输出下一步动作。
+- `AgentDecisionEngine`：LLM 决策器，输出下一步动作、本轮用户意图和回答焦点；不可用或输出非法时会显式报错/升级，不再把最终回答伪装成规则模式。
 - `Tools`：症状抽取、知识检索、诊断/方案、复查比较、视觉观察、天气观察、内部提醒。
 - `Memory`：PostgreSQL 中的 Case、CaseEvent、Followup、Reminder，以及结构化 JSON 字段。
 - `StateMachine`：控制病例状态流转。
@@ -36,7 +38,7 @@ postgresql+psycopg://xiaxin:123456@127.0.0.1:5432/tomato_agent
 - `OPENAI_API_KEY`：后续启用真实 LLM/视觉工具。
 - `OPENAI_TEXT_MODEL`：文本模型默认值。
 - `OPENAI_VISION_MODEL`：视觉模型默认值。
-- `WEATHER_API_KEY`：后续启用真实天气 API。
+- `WEATHER_API_KEY`：预留字段。当前默认使用浏览器经纬度调用 Open-Meteo 免 Key 天气接口。
 - `CORS_ORIGINS`：允许访问后端的前端来源，开发模式默认包含 `5174` 和 `8000`。
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`：Google OAuth 后续接入凭据。
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`：GitHub OAuth 后续接入凭据。
@@ -96,12 +98,12 @@ uvicorn app.main:app --reload
 
 ## 工具状态
 
-- `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API；未配置时返回结构化降级观察。
-- `WeatherTool`：当前解析用户描述中的连续阴雨、高湿、闷棚等信号；真实天气 API 后续接入。
-- `OpenAIAdapter`：文本模型适配器已具备真实调用边界，当前主决策仍使用规则版。
-- `ReminderRepository`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒。
+- `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API 并要求结构化 JSON；输出会写入 `vision_observation`，再由 `CaseOrchestrator` 融合成 `multimodal_observation`，供 Agent 决策、知识检索和诊断证据使用。未配置时返回结构化降级观察。
+- `WeatherTool`：优先使用浏览器经纬度调用 Open-Meteo 获取实时温度、湿度、降水和风速；如果用户文字明确提供地点或天气，则用户输入优先于浏览器定位；如果定位失败，会把失败原因写入工具事件和病例记忆，再降级为文本天气线索。
+- `OpenAIAdapter`：文本模型适配器已具备真实调用边界，用于 Agent 决策、回复表达和视觉工具的模型调用。
+- `ReminderRepository` / `CalendarReminderTool`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒；同时提供 Google Calendar 添加链接和 ICS 下载。网页端不能无授权静默写入 Windows/macOS/手机系统日历，自动同步需要后续接 Google/Microsoft/Apple 日历授权或本地桌面桥接。
 
-工具输出必须写入 Case/Event Memory，再由编排器继续推进，不能绕过状态机和安全检查直接生成最终处置。
+工具输出必须写入 Case/Event Memory，再由编排器继续推进，不能绕过状态机和安全检查直接生成最终处置。图片识别也是如此：多模态模型只提供观察线索，不直接决定病例状态、最终诊断或处置方案。
 
 ## 前端工作台
 
