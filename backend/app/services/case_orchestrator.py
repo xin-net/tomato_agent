@@ -37,6 +37,7 @@ from app.tools.knowledge_search_tool import KnowledgeSearchTool
 from app.tools.location_tool import LocationTool
 from app.tools.response_composer import ResponseComposer
 from app.tools.registry import ToolRegistry
+from app.tools.semantic_observation_tool import SemanticObservationTool
 from app.tools.symptom_extraction_tool import SymptomExtractionTool
 from app.tools.vision_tool import VisionTool
 from app.tools.weather_tool import WeatherTool
@@ -55,6 +56,7 @@ class CaseOrchestrator:
         self.diagnosis_tool = DiagnosisTool()
         self.plan_tool = PlanTool()
         self.response_composer = ResponseComposer()
+        self.semantic_observation_tool = SemanticObservationTool()
         self.followup_compare = FollowupCompareTool()
         self.vision_tool = VisionTool()
         self.weather_tool = WeatherTool()
@@ -63,6 +65,7 @@ class CaseOrchestrator:
         self.calendar_reminder_tool = CalendarReminderTool(self.followups, self.reminders)
         self.tool_registry = ToolRegistry()
         self.tool_registry.register(self.date_tool)
+        self.tool_registry.register(self.semantic_observation_tool)
         self.tool_registry.register(self.location_tool)
         self.tool_registry.register(self.weather_tool)
         self.state_machine = StateMachine()
@@ -75,6 +78,7 @@ class CaseOrchestrator:
         self._append_user_message(case.id, data.symptoms, data.image_urls)
         self._observe_date(case)
         self._append_image_evidence(case, data.image_urls)
+        self._observe_semantics(case, data.symptoms)
         self._observe_weather(
             case,
             data.symptoms,
@@ -97,6 +101,7 @@ class CaseOrchestrator:
         self._append_user_message(case.id, data.message, data.image_urls)
         self._observe_date(case)
         self._append_image_evidence(case, data.image_urls)
+        self._observe_semantics(case, data.message)
         self._observe_weather(
             case,
             data.message,
@@ -204,7 +209,7 @@ class CaseOrchestrator:
 
     def _handle_message(self, case, message: str) -> CaseResponse:
         existing_structured = dict(case.structured_data or {})
-        structured = self.extractor.extract(message)
+        structured = self._semantic_structured_symptoms(message, existing_structured)
         vision_observation = existing_structured.get("vision_observation")
         fused_structured = self._fuse_observations(structured, vision_observation, case)
         case.structured_data = fused_structured.model_dump()
@@ -222,6 +227,8 @@ class CaseOrchestrator:
             case.structured_data["weather_observation"] = existing_structured["weather_observation"]
         if existing_structured.get("date_observation"):
             case.structured_data["date_observation"] = existing_structured["date_observation"]
+        if existing_structured.get("semantic_observation"):
+            case.structured_data["semantic_observation"] = existing_structured["semantic_observation"]
         self._merge_extracted_fields(case, fused_structured.raw)
         if structured.severity and not case.severity:
             case.severity = structured.severity
@@ -242,6 +249,7 @@ class CaseOrchestrator:
             structured_symptoms=fused_structured,
             vision_observation=vision_observation,
             multimodal_observation=case.structured_data.get("multimodal_observation"),
+            semantic_observation=case.structured_data.get("semantic_observation"),
             weather_observation=case.structured_data.get("weather_observation"),
             date_observation=case.structured_data.get("date_observation"),
             active_followup=self._followup_context(active_followup) if active_followup else None,
@@ -567,6 +575,38 @@ class CaseOrchestrator:
             system_output=observation.model_dump(),
         )
 
+    def _observe_semantics(self, case, message: str) -> None:
+        active_followup = self.followups.active_for_case(case.id)
+        observation = self._call_tool(
+            case.id,
+            "SemanticObservationTool",
+            lambda: self.tool_registry.call(
+                "SemanticObservationTool",
+                message=message,
+                case_memory={
+                    "status": case.status,
+                    "suspected_problem": case.suspected_problem,
+                    "growth_stage": case.growth_stage,
+                    "days_to_harvest": case.days_to_harvest,
+                    "affected_parts": case.affected_parts,
+                    "recent_weather": case.recent_weather,
+                    "structured_data": case.structured_data or {},
+                },
+                active_followup=self._followup_context(active_followup) if active_followup else None,
+                vision_observation=(case.structured_data or {}).get("vision_observation"),
+                date_observation=(case.structured_data or {}).get("date_observation"),
+                history_summary=self._history_summary(case.id),
+            ),
+            input_summary={
+                "message_length": len(message),
+                "active_followup": bool(active_followup),
+                "has_vision": bool((case.structured_data or {}).get("vision_observation")),
+            },
+        )
+        current = dict(case.structured_data or {})
+        current["semantic_observation"] = observation.model_dump(mode="json")
+        case.structured_data = current
+
     def _observe_weather(
         self,
         case,
@@ -577,8 +617,9 @@ class CaseOrchestrator:
         location_source: str | None = None,
         location_error: str | None = None,
     ) -> None:
+        semantic = (case.structured_data or {}).get("semantic_observation") or {}
         text_observation = self.extractor.extract(message)
-        raw = text_observation.raw
+        raw = {**text_observation.raw, **self._semantic_raw(semantic)}
         explicit_location = raw.get("location_text")
         explicit_weather = raw.get("recent_weather") or case.recent_weather
         previous_weather = (case.structured_data or {}).get("weather_observation") or {}
@@ -880,6 +921,54 @@ class CaseOrchestrator:
             environment_confirmation=self._environment_confirmation(case),
         )
 
+    def _semantic_structured_symptoms(self, message: str, existing_structured: dict) -> StructuredSymptoms:
+        semantic = existing_structured.get("semantic_observation") or {}
+        if semantic.get("is_configured") and semantic.get("status") == "analyzed":
+            raw = self._semantic_raw(semantic)
+            return StructuredSymptoms(
+                affected_parts=self._unique([str(item) for item in semantic.get("affected_parts", [])]),
+                symptoms=self._unique([str(item) for item in semantic.get("symptoms", [])]),
+                possible_categories=self._unique([str(item) for item in semantic.get("possible_categories", [])]),
+                missing_fields=[],
+                severity=semantic.get("severity"),
+                raw=raw,
+            )
+        fallback = self.extractor.extract(message)
+        fallback.raw["semantic_observation_status"] = semantic.get("status", "not_run")
+        if semantic.get("uncertainties"):
+            fallback.raw["semantic_uncertainties"] = semantic.get("uncertainties")
+        return fallback
+
+    def _semantic_raw(self, semantic: dict) -> dict:
+        raw: dict[str, Any] = {}
+        mapping = {
+            "location_text": "location_text",
+            "recent_weather": "recent_weather",
+            "growth_stage": "growth_stage",
+            "harvest_hint": "harvest_hint",
+            "days_to_harvest": "days_to_harvest",
+            "severity": "severity",
+        }
+        for source_key, target_key in mapping.items():
+            value = semantic.get(source_key)
+            if value not in (None, "", [], {}):
+                raw[target_key] = value
+        if semantic.get("location_text"):
+            raw["location_source"] = "llm_semantic"
+        if semantic.get("recent_weather"):
+            raw["weather_source"] = "llm_semantic"
+        if semantic.get("mentioned_problems"):
+            raw["mentioned_problems"] = self._unique([str(item) for item in semantic.get("mentioned_problems", [])])
+        if semantic.get("corrections"):
+            raw["corrections"] = semantic.get("corrections")
+        if semantic.get("is_followup_report"):
+            raw["is_followup_report"] = True
+            raw["followup_trend"] = semantic.get("followup_trend")
+            raw["followup_evidence"] = semantic.get("followup_evidence", [])
+        raw["semantic_user_intent"] = semantic.get("user_intent", "unknown")
+        raw["semantic_confidence"] = semantic.get("confidence", "low")
+        return raw
+
     def _environment_confirmation(self, case) -> str | None:
         weather = (case.structured_data or {}).get("weather_observation") or {}
         if not weather:
@@ -948,6 +1037,21 @@ class CaseOrchestrator:
         return f"距离采收约 {days_to_harvest} 天，仍需避免自行混配或超范围用药。"
 
     def _merge_extracted_fields(self, case, raw: dict) -> None:
+        corrections = raw.get("corrections") or {}
+        if corrections.get("growth_stage"):
+            case.growth_stage = corrections["growth_stage"]
+        if corrections.get("days_to_harvest") is not None:
+            case.days_to_harvest = corrections["days_to_harvest"]
+        if corrections.get("recent_weather"):
+            case.recent_weather = corrections["recent_weather"]
+        if corrections.get("location_text"):
+            current = dict(case.structured_data or {})
+            weather = dict(current.get("weather_observation") or {})
+            weather["location"] = corrections["location_text"]
+            weather["location_source"] = "llm_correction"
+            current["weather_observation"] = weather
+            case.structured_data = current
+
         if raw.get("growth_stage") and not case.growth_stage:
             case.growth_stage = raw["growth_stage"]
         if raw.get("recent_weather") and not case.recent_weather:
@@ -971,6 +1075,9 @@ class CaseOrchestrator:
                 "symptoms": context.structured_symptoms.symptoms,
                 "vision_status": (context.vision_observation or {}).get("status"),
                 "vision_confidence": (context.vision_observation or {}).get("confidence"),
+                "semantic_status": (context.semantic_observation or {}).get("status"),
+                "semantic_intent": (context.semantic_observation or {}).get("user_intent"),
+                "semantic_followup_trend": (context.semantic_observation or {}).get("followup_trend"),
                 "weather_status": bool(context.weather_observation),
                 "weather_risk_signals": (context.weather_observation or {}).get("risk_signals", []),
                 "today": (context.date_observation or {}).get("today"),

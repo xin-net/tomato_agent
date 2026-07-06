@@ -21,6 +21,7 @@ class AgentDecisionContext(BaseModel):
     structured_symptoms: StructuredSymptoms
     vision_observation: dict[str, Any] | None = None
     multimodal_observation: dict[str, Any] | None = None
+    semantic_observation: dict[str, Any] | None = None
     weather_observation: dict[str, Any] | None = None
     date_observation: dict[str, Any] | None = None
     active_followup: dict[str, Any] | None = None

@@ -494,7 +494,7 @@ Frontend: Vite + React + TypeScript + Ant Design + React Flow
 Persistence: PostgreSQL via SQLAlchemy + psycopg + Alembic
 Schemas: Pydantic
 Knowledge Memory: 结构化 Markdown 文件
-LLM use: VisionTool 已通过 OpenAI Responses API 生成结构化视觉观察，并进入多模态融合；AgentDecisionEngine 可使用 LLM 输出受控 JSON 决策，后端继续用 Action 白名单、StateMachine、SafetyChecker 和输出策略约束它。规则决策主要作为测试基线和不可用环境下的开发模式，不再作为产品体验目标
+LLM use: VisionTool 已通过 OpenAI Responses API 生成结构化视觉观察，并进入多模态融合；SemanticObservationTool 使用 LLM 理解本轮自然语言，结构化输出地点、天气、阶段、采收、复查变化、趋势和用户纠正；AgentDecisionEngine 使用 LLM 输出受控 JSON 决策。后端继续用 Action 白名单、StateMachine、SafetyChecker 和输出策略约束它。规则逻辑只作为测试基线、模型不可用降级和确定性安全边界，不再主导产品语义理解。
 Tool protocol: DateTool、WeatherTool、CalendarReminderTool 等工具通过 ToolRegistry 统一描述和调用；`backend/app/mcp_server.py` 提供可选 MCP server 入口，后续可把这些能力暴露给 MCP Host 或接外部 MCP 工具
 Deterministic code: 状态流转、安全策略、持久化、复查日期
 ```

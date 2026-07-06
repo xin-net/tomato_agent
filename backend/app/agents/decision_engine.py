@@ -81,12 +81,13 @@ class AgentDecisionEngine:
         missing = self._effective_missing_fields(context)
         high_confidence_vision = self._has_high_confidence_vision(context)
         if self._is_followup_change_message(context):
+            semantic = context.semantic_observation or {}
             return AgentDecision(
                 next_action=AgentAction.COMPARE_FOLLOWUP,
-                reason="用户正在描述本病例后续变化，需要比较复查趋势并调整方案。",
+                reason="语义观察显示用户正在描述本病例后续变化，需要比较复查趋势并调整方案。",
                 requested_state=CaseStatus.FOLLOWUP_REVIEW,
                 confidence="high",
-                decision_source="rule",
+                decision_source="semantic_guardrail" if semantic.get("is_configured") else "rule",
                 observations_used=self._observation_summary(context),
                 tool_plan=["DateTool", "FollowupCompareTool", "StateMachine", "CalendarReminderTool", "EventMemory"],
                 user_intent="followup_change_report",
@@ -140,6 +141,7 @@ class AgentDecisionEngine:
             "structured_symptoms": context.structured_symptoms.model_dump(),
             "vision_observation": context.vision_observation,
             "multimodal_observation": context.multimodal_observation,
+            "semantic_observation": context.semantic_observation,
             "weather_observation": context.weather_observation,
             "date_observation": context.date_observation,
             "active_followup": context.active_followup,
@@ -160,6 +162,8 @@ class AgentDecisionEngine:
             "如果用户只是补充图片、补充症状、提出猜测、问“是不是白粉虱/早疫病”、纠正诊断或继续询问怎么办，"
             "应选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO，而不是 COMPARE_FOLLOWUP。"
             "你还必须判断本轮用户意图 user_intent 和回答焦点 response_focus。"
+            "semantic_observation 是上一层大模型语义观察结果，已经负责理解地点、天气、阶段、采收和复查变化；"
+            "你应优先使用它，而不是做关键词猜测。"
             "如果用户追问“能不能用药、能不能打药、采收前能否用药”，user_intent 应为 chemical_safety_question，"
             "response_focus 应聚焦采收安全、是否适合用药、安全边界和下一步观察，不要重复完整诊断。"
             "如果用户追问“用什么药、推荐药名、剂量、兑水、频次”，user_intent 应为 pesticide_detail_question，"
@@ -345,6 +349,19 @@ class AgentDecisionEngine:
         ]
 
     def _infer_turn_focus(self, context: AgentDecisionContext) -> tuple[str, list[str]]:
+        semantic = context.semantic_observation or {}
+        semantic_intent = semantic.get("user_intent")
+        if semantic.get("is_configured") and semantic_intent and semantic_intent != "unknown":
+            focus_by_intent = {
+                "followup_report": ["判断变化趋势", "根据变化调整方案和复查"],
+                "correction": ["按用户纠正更新病例事实", "重新评估诊断和方案"],
+                "chemical_question": ["回答用药安全", "结合采收和安全边界"],
+                "location_update": ["更新实际种植地点", "重新观察天气环境"],
+                "weather_update": ["更新天气环境", "重新评估风险"],
+                "handling_plan_question": ["聚焦下一步处理", "说明观察重点和复查安排"],
+            }
+            return str(semantic_intent), focus_by_intent.get(str(semantic_intent), ["围绕用户本轮问题回答"])
+
         text = context.latest_user_message or ""
         if any(word in text for word in ["用什么药", "什么药", "药名", "剂量", "兑水", "频次", "喷几次"]):
             return (
@@ -394,29 +411,8 @@ class AgentDecisionEngine:
     def _is_followup_change_message(self, context: AgentDecisionContext) -> bool:
         if not context.active_followup:
             return False
-        text = context.latest_user_message or ""
-        change_words = [
-            "更多",
-            "变多",
-            "增加",
-            "新增",
-            "扩散",
-            "扩大",
-            "严重",
-            "更严重",
-            "好转",
-            "稳定",
-            "没有新增",
-            "没有增加",
-            "少了",
-            "减少",
-        ]
-        time_or_state_words = ["现在", "今天", "这次", "后来", "又", "已经", "处理后", "复查", "观察"]
-        if any(word in text for word in change_words) and (
-            any(word in text for word in time_or_state_words) or context.case_status == CaseStatus.FOLLOWUP_PENDING
-        ):
-            return True
-        return False
+        semantic = context.semantic_observation or {}
+        return bool(semantic.get("is_configured") and semantic.get("is_followup_report"))
 
     def _tool_plan_for_intent(self, intent: str) -> list[str]:
         common = ["DateTool", "KnowledgeSearchTool", "DiagnosisTool", "SafetyChecker"]

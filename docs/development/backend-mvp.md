@@ -12,7 +12,7 @@ MVP 阶段的病例闭环已经完成。当前开发重点是向完整版 Agent 
 
 - `CaseOrchestrator`：病例编排器，负责把用户输入、工具观察、状态机、事件记忆和复查任务串起来。
 - `AgentDecisionEngine`：LLM 决策器，输出下一步动作、本轮用户意图和回答焦点；不可用或输出非法时会显式报错/升级，不再把最终回答伪装成规则模式。
-- `Tools`：症状抽取、知识检索、诊断/方案、复查比较、视觉观察、天气观察、内部提醒。
+- `Tools`：语义观察、症状抽取、知识检索、诊断/方案、复查比较、视觉观察、地点/天气观察、内部提醒。
 - `Memory`：PostgreSQL 中的 Case、CaseEvent、Followup、Reminder，以及结构化 JSON 字段。
 - `StateMachine`：控制病例状态流转。
 - `SafetyChecker`：处置建议前的安全约束。
@@ -99,6 +99,7 @@ uvicorn app.main:app --reload
 ## 工具状态
 
 - `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API 并要求结构化 JSON；输出会写入 `vision_observation`，再由 `CaseOrchestrator` 融合成 `multimodal_observation`，供 Agent 决策、知识检索和诊断证据使用。未配置时返回结构化降级观察。
+- `SemanticObservationTool`：使用大模型理解用户本轮自然语言，结构化判断地点、天气、阶段、采收、是否为复查变化、复查趋势和用户纠正。产品体验上语义理解由该工具和 AgentDecisionEngine 主导，硬规则只负责状态合法性、安全边界和开发环境降级。
 - `WeatherTool`：优先使用浏览器经纬度调用 Open-Meteo 获取实时温度、湿度、降水和风速；如果用户文字明确提供地点或天气，则用户输入优先于浏览器定位；如果定位失败，会把失败原因写入工具事件和病例记忆，再降级为文本天气线索。
 - `OpenAIAdapter`：文本模型适配器已具备真实调用边界，用于 Agent 决策、回复表达和视觉工具的模型调用。
 - `ReminderRepository` / `CalendarReminderTool`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒；同时提供 Google Calendar 添加链接和 ICS 下载。网页端不能无授权静默写入 Windows/macOS/手机系统日历，自动同步需要后续接 Google/Microsoft/Apple 日历授权或本地桌面桥接。

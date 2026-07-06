@@ -2,7 +2,20 @@ from app.domain.enums import CaseStatus, EventType
 from app.domain.models import Reminder
 from app.schemas.cases import CreateCaseInput, FollowupInput, ReplyInput
 from app.services.case_orchestrator import CaseOrchestrator
+from app.tools.semantic_observation_tool import SemanticObservation
 from app.tools.vision_tool import VisionObservation
+
+
+def semantic_stub(**overrides):
+    defaults = {
+        "status": "analyzed",
+        "is_configured": True,
+        "model": "test-semantic",
+        "confidence": "high",
+        "user_intent": "initial_diagnosis",
+    }
+    defaults.update(overrides)
+    return SemanticObservation(**defaults)
 
 
 def test_create_case_asks_more_info_when_input_is_sparse(db_session):
@@ -233,7 +246,28 @@ def test_pending_followup_does_not_make_every_reply_a_followup(db_session):
     assert EventType.FOLLOWUP_COMPARED not in event_types
 
 
-def test_more_pests_reply_is_followup_change_not_location(db_session):
+def test_more_pests_reply_is_followup_change_not_location(db_session, monkeypatch):
+    def fake_observe(self, **kwargs):
+        message = kwargs.get("message", "")
+        if "更多的小虫" in message:
+            return semantic_stub(
+                user_intent="followup_report",
+                is_followup_report=True,
+                followup_trend="WORSENING",
+                followup_evidence=["用户表达虫量比之前更多。"],
+                symptoms=["虫量增多"],
+            )
+        return semantic_stub(
+            affected_parts=["叶背"],
+            symptoms=["白色小虫"],
+            possible_categories=["虫害"],
+            mentioned_problems=["白粉虱"],
+            growth_stage="结果期",
+            days_to_harvest=10,
+        )
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_observe)
+
     created = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(
             growth_stage="结果期",
@@ -264,6 +298,49 @@ def test_more_pests_reply_is_followup_change_not_location(db_session):
     event_types = [event.event_type for event in detail.events]
     assert EventType.FOLLOWUP_SUBMITTED in event_types
     assert EventType.FOLLOWUP_COMPARED in event_types
+
+
+def test_mold_and_yellow_spots_expanding_is_llm_followup_worsening(db_session, monkeypatch):
+    def fake_observe(self, **kwargs):
+        message = kwargs.get("message", "")
+        if "霉层增多" in message:
+            return semantic_stub(
+                user_intent="followup_report",
+                is_followup_report=True,
+                followup_trend="WORSENING",
+                followup_evidence=["霉层增多", "黄斑扩大"],
+                symptoms=["霉层增多", "黄斑扩大"],
+                possible_categories=["病害"],
+            )
+        return semantic_stub(
+            affected_parts=["叶片"],
+            symptoms=["霉层", "黄斑"],
+            possible_categories=["病害"],
+            growth_stage="结果期",
+            days_to_harvest=10,
+        )
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_observe)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            symptoms="叶片有霉层和黄斑，结果期，距离采收大概 10 天。",
+            affected_parts=["叶片"],
+            days_to_harvest=10,
+        )
+    )
+
+    response = CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        data=ReplyInput(message="现在忽然霉层增多了，黄斑扩大了"),
+    )
+
+    assert response.response_type == "followup_result"
+    assert response.status == CaseStatus.ESCALATED
+    assert response.trend is not None
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    compared = next(event for event in detail.events if event.event_type == EventType.FOLLOWUP_COMPARED)
+    assert compared.system_output["trend"] == "WORSENING"
 
 
 def test_vision_candidate_takes_priority_over_weak_text_match(db_session, monkeypatch):

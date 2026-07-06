@@ -96,4 +96,5 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
 - `KnowledgeSearchTool` 当前是 Markdown 知识库匹配，并对视觉候选问题、用户提到的问题名给予更高权重。
 - `DiagnosisTool` 当前根据知识库候选项和视觉观察生成结构化诊断。
 - `PlanTool` 当前根据知识库和安全检查生成处置方案。
-- `FollowupCompareTool` 当前仍是规则比较；后续应升级为 LLM 语义判断，用于比较复查趋势。
+- `SemanticObservationTool` 负责先用大模型理解用户自然语言，结构化输出地点、天气、阶段、采收、复查变化、复查趋势和用户纠正。
+- `FollowupCompareTool` 优先复用大模型语义判断复查趋势；只有模型不可用时才进入开发/测试用降级路径。

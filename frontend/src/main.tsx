@@ -143,7 +143,7 @@ function responseToMessage(response: CaseResponse) {
     }
   }
   if (response.followup) {
-    lines.push(`复查日期：${response.followup.due_date}`);
+    lines.push(`下次复查日期：${response.followup.due_date}`);
   }
   if (response.trend) {
     lines.push(`复查趋势：${response.trend}`);
@@ -241,7 +241,7 @@ function AgentWorkbench() {
   }, []);
 
   const refreshDetail = useCallback(async (caseId: number | null) => {
-    if (!caseId) {
+    if (!caseId || caseId < 0) {
       setCaseDetail(null);
       return;
     }
@@ -312,6 +312,7 @@ function AgentWorkbench() {
       imageUrls,
     };
     const pendingId = crypto.randomUUID();
+    const optimisticCaseId = selectedCaseId ?? -Date.now();
     const pendingMessage: ChatMessage = {
       id: pendingId,
       role: 'agent',
@@ -319,6 +320,20 @@ function AgentWorkbench() {
       pending: true,
     };
     setMessages((current) => [...current, userMessage, pendingMessage]);
+    if (!selectedCaseId) {
+      const optimisticCase: CaseListItem = {
+        id: optimisticCaseId,
+        title: content.slice(0, 24) || '新的番茄异常',
+        crop: '番茄',
+        suspected_problem: 'Agent 正在处理',
+        status: 'NEW',
+        followup_date: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setCases((current) => [optimisticCase, ...current.filter((item) => item.id !== optimisticCaseId)]);
+      setSelectedCaseId(optimisticCaseId);
+    }
     setInput('');
     setImageUrls([]);
     setSending(true);
@@ -670,7 +685,8 @@ function AgentWorkbench() {
                       label="采收"
                       value={harvestSummary(caseDetail)}
                     />
-                    <InfoLine label="复查日期" value={formatDate(caseDetail.followup_date)} />
+                    <InfoLine label="上级咨询日期" value={formatDate(caseDetail.created_at)} />
+                    <InfoLine label="下次复查日期" value={formatDate(caseDetail.followup_date)} />
                     <ImageEvidence detail={caseDetail} onPreview={openPreview} />
                     {caseDetail.current_plan?.summary ? (
                       <Alert type="success" showIcon message={caseDetail.current_plan.summary} />
@@ -1034,7 +1050,7 @@ function legacyPlanMessage(detail: CaseDetail) {
     lines.push('', `疑似问题：${detail.suspected_problem || '-'} / ${detail.likelihood || '-'}`);
   }
   if (detail.followup_date) {
-    lines.push(`复查日期：${formatDate(detail.followup_date)}`);
+    lines.push(`下次复查日期：${formatDate(detail.followup_date)}`);
   }
   return lines.join('\n');
 }
@@ -1207,7 +1223,10 @@ function environmentSummary(detail: CaseDetail) {
     detail.recent_weather ||
     String(weather.status || '-');
   return {
-    location: weather.location ? `${weather.location}（${weather.location_source || '未知来源'}）` : '-',
+    location:
+      weather.location && !['浏览器定位', '用户未提供地点'].includes(weather.location)
+        ? weather.location
+        : '暂未识别出',
     weather: weatherText,
   };
 }
@@ -1215,13 +1234,13 @@ function environmentSummary(detail: CaseDetail) {
 function stageSummary(detail: CaseDetail) {
   const vision = detail.structured_data.vision_observation as { raw_text?: string | null } | undefined;
   const source = vision?.raw_text ? '视觉/上下文推断' : '用户/上下文';
-  return detail.growth_stage ? `${detail.growth_stage}（${source}）` : '待识别，可直接纠正';
+  return detail.growth_stage ? `${detail.growth_stage}（${source}）` : '暂未识别出';
 }
 
 function harvestSummary(detail: CaseDetail) {
   const vision = detail.structured_data.vision_observation as { harvest_hint?: string | null } | undefined;
   if (detail.days_to_harvest == null && vision?.harvest_hint) return `${vision.harvest_hint}（视觉/上下文推断）`;
-  if (detail.days_to_harvest == null) return '待识别，可直接纠正';
+  if (detail.days_to_harvest == null) return '暂未识别出';
   if (vision?.harvest_hint) return `${detail.days_to_harvest} 天（视觉提示：${vision.harvest_hint}）`;
   return `${detail.days_to_harvest} 天（视觉/日期/上下文推断）`;
 }
