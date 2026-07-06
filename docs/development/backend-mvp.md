@@ -99,7 +99,7 @@ uvicorn app.main:app --reload
 ## 工具状态
 
 - `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API 并要求结构化 JSON；输出会写入 `vision_observation`，再由 `CaseOrchestrator` 融合成 `multimodal_observation`，供 Agent 决策、知识检索和诊断证据使用。未配置时返回结构化降级观察。
-- `SemanticObservationTool`：使用大模型理解用户本轮自然语言，只结构化判断本轮意图、是否为复查变化、复查趋势、用户纠正和症状语义。它不负责地点、天气、阶段或采收，避免和 LocationTool、WeatherTool、VisionTool 抢职责。
+- `SemanticObservationTool`：使用大模型理解用户本轮自然语言，只读取本轮用户文字、病例文字记忆、复查计划和历史摘要，结构化判断本轮意图、是否为复查变化、复查趋势、用户纠正和症状语义。它不读取 VisionTool/WeatherTool/LocationTool 输出，也不负责地点、天气、阶段或采收，避免工具职责交叉。
 - `LocationTool`：使用独立 LLM 判断用户本轮是否明确提供种植地点，并处理用户显式地点、病例记忆、浏览器定位和反向地理编码的优先级。
 - `WeatherTool`：优先使用浏览器经纬度调用 Open-Meteo 获取实时温度、湿度、降水和风速；如果用户文字明确提供地点或天气，则用户输入优先于浏览器定位；如果定位失败，会把失败原因写入工具事件和病例记忆，再降级为文本天气线索。
 - `OpenAIAdapter`：文本模型适配器已具备真实调用边界，用于 Agent 决策、回复表达和视觉工具的模型调用。

@@ -1,6 +1,7 @@
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
+import re
 
 from typing import Any, Callable
 
@@ -590,10 +591,12 @@ class CaseOrchestrator:
                     "days_to_harvest": case.days_to_harvest,
                     "affected_parts": case.affected_parts,
                     "recent_weather": case.recent_weather,
-                    "structured_data": case.structured_data or {},
+                    "severity": case.severity,
+                    "current_plan_summary": (case.current_plan or {}).get("summary")
+                    if case.current_plan
+                    else None,
                 },
                 active_followup=self._followup_context(active_followup) if active_followup else None,
-                vision_observation=(case.structured_data or {}).get("vision_observation"),
                 date_observation=(case.structured_data or {}).get("date_observation"),
                 history_summary=self._history_summary(case.id),
             ),
@@ -1032,8 +1035,9 @@ class CaseOrchestrator:
         corrections = raw.get("corrections") or {}
         if corrections.get("growth_stage"):
             case.growth_stage = corrections["growth_stage"]
-        if corrections.get("days_to_harvest") is not None:
-            case.days_to_harvest = corrections["days_to_harvest"]
+        correction_days = self._coerce_days_to_harvest(corrections.get("days_to_harvest"))
+        if correction_days is not None:
+            case.days_to_harvest = correction_days
         if corrections.get("recent_weather"):
             case.recent_weather = corrections["recent_weather"]
         if corrections.get("location_text"):
@@ -1048,14 +1052,30 @@ class CaseOrchestrator:
             case.growth_stage = raw["growth_stage"]
         if raw.get("recent_weather") and not case.recent_weather:
             case.recent_weather = raw["recent_weather"]
-        if raw.get("days_to_harvest") is not None and case.days_to_harvest is None:
-            case.days_to_harvest = raw["days_to_harvest"]
+        raw_days = self._coerce_days_to_harvest(raw.get("days_to_harvest"))
+        if raw_days is not None and case.days_to_harvest is None:
+            case.days_to_harvest = raw_days
         if raw.get("environment") and not case.environment:
             case.environment = raw["environment"]
         if raw.get("recent_pesticide_use") and not case.recent_pesticide_use:
             case.recent_pesticide_use = raw["recent_pesticide_use"]
         if raw.get("recent_fertilizer_use") and not case.recent_fertilizer_use:
             case.recent_fertilizer_use = raw["recent_fertilizer_use"]
+
+    def _coerce_days_to_harvest(self, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            match = re.search(r"\d{1,3}", value)
+            if match:
+                return int(match.group(0))
+        return None
 
     def _build_decision_trace(self, context: AgentDecisionContext, decision) -> dict:
         return {

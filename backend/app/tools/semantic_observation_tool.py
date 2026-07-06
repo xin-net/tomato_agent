@@ -38,7 +38,6 @@ class SemanticObservationTool:
         message: str,
         case_memory: dict[str, Any] | None = None,
         active_followup: dict[str, Any] | None = None,
-        vision_observation: dict[str, Any] | None = None,
         date_observation: dict[str, Any] | None = None,
         history_summary: list[dict[str, Any]] | None = None,
     ) -> SemanticObservation:
@@ -47,7 +46,6 @@ class SemanticObservationTool:
                 message=message,
                 case_memory=case_memory or {},
                 active_followup=active_followup,
-                vision_observation=vision_observation,
                 date_observation=date_observation,
                 history_summary=history_summary or [],
             )
@@ -85,7 +83,6 @@ class SemanticObservationTool:
         message: str,
         case_memory: dict[str, Any],
         active_followup: dict[str, Any] | None,
-        vision_observation: dict[str, Any] | None,
         date_observation: dict[str, Any] | None,
         history_summary: list[dict[str, Any]],
     ) -> str:
@@ -93,25 +90,26 @@ class SemanticObservationTool:
             "latest_user_message": message,
             "case_memory": case_memory,
             "active_followup": active_followup,
-            "vision_observation_summary": vision_observation,
             "date_observation": date_observation,
             "history_summary": history_summary,
         }
         return (
             "你是番茄病虫害处置闭环系统的语义观察工具。"
             "你的任务不是给最终诊断，而是理解用户本轮自然语言，并输出严格 JSON。"
-            "必须依靠语义理解，不要做关键词匹配。汉语表达可能非常灵活。"
+            "只根据 latest_user_message、本病例已有文字记忆、复查计划和历史摘要来判断本轮语义；"
+            "不要依赖图片工具、天气工具或地点工具的输出。"
+            "必须依靠语义理解，不要做关键词匹配或固定话术匹配。汉语表达可能非常灵活。"
             "你不负责抽取种植地点、实时天气、生长阶段或采收时间："
             "地点由 LocationTool 判断，天气由 WeatherTool 判断，图片中的阶段/采收由 VisionTool 判断。"
             "如果用户纠正这些事实，只把它们放进 corrections，不要另设顶层字段。"
             "你需要判断：\n"
             "1. 用户本轮意图 user_intent，例如 initial_diagnosis、followup_report、correction、chemical_question、pesticide_detail_question、handling_plan_question、location_update、weather_update。\n"
-            "2. 如果已有 active_followup，判断用户是否在描述复查/变化；例如处理后、一段时间后、这几天、现在相比之前发生了变化，都可能是复查变化。\n"
+            "2. 如果已有 active_followup，判断用户是否在描述后续观察/变化。不要因为有 active_followup 就默认本轮是复查，也不要因为用户没有说“复查”两个字就否认变化报告。\n"
             "3. 如果是复查变化，输出 followup_trend：IMPROVING、UNCHANGED、WORSENING、INSUFFICIENT_INFO 或 NEEDS_HUMAN_CONFIRMATION，并给 evidence。\n"
-            "   重要：'没有再长了'、'没有继续增加'、'看起来很健康'、'恢复了' 应判断为 IMPROVING 或 UNCHANGED，不能判断为 WORSENING。"
-            "   '霉层增多'、'黄斑扩大'、'虫子更多'、'扩散到新部位'、'明显加重' 才是 WORSENING。"
-            "4. 抽取发生部位、症状、问题类别、用户提到的候选问题、严重程度。\n"
+            "   趋势判断要比较“本轮描述相对病例记忆中的上一状态”是好转、稳定、加重还是信息不足；不要被单个字词左右。\n"
+            "4. 抽取本轮文字中表达的发生部位、症状语义、问题类别、用户提到的候选问题、严重程度。\n"
             "5. 如果用户纠正了前面信息，把 corrections 写成字段到新值的对象，例如 suspected_problem、growth_stage、days_to_harvest、recent_weather、location_text。\n"
+            "corrections 中的 days_to_harvest 必须是整数天数；如果用户说“10天”，输出 10；无法确定则输出 null。"
             "识别不出来就用 null 或空数组，不要编造；不确定写入 uncertainties。"
             "只输出 JSON 对象，不要 Markdown。"
             "字段必须包含：user_intent,is_followup_report,followup_trend,followup_evidence,"

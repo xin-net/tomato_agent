@@ -402,6 +402,54 @@ def test_followup_no_new_pests_and_healthy_is_not_worsening(db_session, monkeypa
     assert compared.system_output["trend"] == "IMPROVING"
 
 
+def test_llm_harvest_correction_string_days_is_normalized(db_session, monkeypatch):
+    def fake_observe(self, **kwargs):
+        message = kwargs.get("message", "")
+        if "离采收还有10天" in message:
+            return semantic_stub(
+                user_intent="followup_report",
+                is_followup_report=True,
+                followup_trend="WORSENING",
+                followup_evidence=["用户描述斑点变大变黄。"],
+                affected_parts=["叶片"],
+                symptoms=["斑点变大", "斑点变黄"],
+                possible_categories=["病害"],
+                severity="加重",
+                corrections={
+                    "growth_stage": "结果期",
+                    "days_to_harvest": "10天",
+                    "recent_fertilizer_use": "近期没有施肥用药",
+                    "recent_pesticide_use": "近期没有施肥用药",
+                },
+            )
+        return semantic_stub(
+            affected_parts=["叶片"],
+            symptoms=["斑点"],
+            possible_categories=["病害"],
+            growth_stage="结果期",
+            days_to_harvest=10,
+        )
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_observe)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            symptoms="叶片有斑点，结果期，距离采收大概 10 天。",
+            affected_parts=["叶片"],
+            days_to_harvest=10,
+        )
+    )
+
+    response = CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        data=ReplyInput(message="现在已经是结果期，离采收还有10天，近期也没有施肥用药。现在斑点已经变大变黄了"),
+    )
+
+    assert response.status in {CaseStatus.ESCALATED, CaseStatus.FOLLOWUP_REVIEW}
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert detail.days_to_harvest == 10
+
+
 def test_vision_candidate_takes_priority_over_weak_text_match(db_session, monkeypatch):
     def fake_analyze(self, image_urls, context=""):
         return VisionObservation(
