@@ -1,5 +1,6 @@
-from app.domain.enums import CaseStatus, EventType
+from app.domain.enums import AgentAction, CaseStatus, EventType, FollowupTrend
 from app.domain.models import Reminder
+from app.schemas.agent import AgentDecision
 from app.schemas.cases import CreateCaseInput, FollowupInput, ReplyInput
 from app.services.case_orchestrator import CaseOrchestrator
 from app.tools.semantic_observation_tool import SemanticObservation
@@ -404,6 +405,93 @@ def test_followup_no_new_pests_and_healthy_is_not_worsening(db_session, monkeypa
     detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
     compared = next(event for event in detail.events if event.event_type == EventType.FOLLOWUP_COMPARED)
     assert compared.system_output["trend"] == "IMPROVING"
+
+
+def test_followup_compare_uses_decision_trend_when_semantic_trend_is_missing(db_session, monkeypatch):
+    def fake_observe(self, **kwargs):
+        message = kwargs.get("message", "")
+        if "虫量忽然增加" in message:
+            return semantic_stub(
+                user_intent="followup_report",
+                is_followup_report=True,
+                followup_trend=None,
+                followup_evidence=[],
+                symptoms=["虫量增加"],
+                possible_categories=["虫害"],
+            )
+        return semantic_stub(
+            affected_parts=["叶背"],
+            symptoms=["白色小虫"],
+            possible_categories=["虫害"],
+            mentioned_problems=["白粉虱"],
+            growth_stage="结果期",
+            days_to_harvest=10,
+        )
+
+    def fake_decide(self, context):
+        semantic = context.semantic_observation or {}
+        if semantic.get("is_followup_report"):
+            return AgentDecision(
+                next_action=AgentAction.COMPARE_FOLLOWUP,
+                requested_state=CaseStatus.FOLLOWUP_REVIEW,
+                reason="用户描述虫量突然增加，按复查加重处理。",
+                confidence="high",
+                decision_source="llm:test",
+                observations_used=["虫量忽然增加"],
+                tool_plan=["SemanticObservationTool", "StateMachine", "CalendarReminderTool", "EventMemory"],
+                user_intent="followup_report",
+                response_focus=["判断加重趋势", "调整处置和复查"],
+                followup_trend=FollowupTrend.WORSENING,
+                followup_evidence=["用户说虫量忽然增加"],
+            )
+        return AgentDecision(
+            next_action=AgentAction.DIAGNOSE_AND_PLAN,
+            requested_state=CaseStatus.FOLLOWUP_PENDING,
+            reason="初次判断并安排复查。",
+            confidence="high",
+            decision_source="llm:test",
+            observations_used=["叶背白色小虫"],
+            tool_plan=["SafetyChecker", "CalendarReminderTool", "ResponseComposer"],
+            user_intent="initial_diagnosis",
+            response_focus=["给出处置方向", "安排复查"],
+            information_sufficient=True,
+            problem_category="虫害",
+            likely_causes=["白粉虱"],
+            diagnosis_evidence=["叶背白色小虫"],
+            confidence_label="较高",
+            severity_label="轻到中等",
+            immediate_actions=["先检查叶背并清理明显虫源"],
+            observation_points=["虫量是否继续增加"],
+            escalation_conditions=["虫量快速增加"],
+            followup_after_days=3,
+            plain_summary="当前更像白粉虱，先处理并复查。",
+        )
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_observe)
+    monkeypatch.setattr("app.agents.decision_engine.AgentDecisionEngine.decide", fake_decide)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="叶背有很多白色小虫，一碰有白色飞虫，结果期，距离采收大概 10 天。",
+            affected_parts=["叶背"],
+            days_to_harvest=10,
+        )
+    )
+
+    response = CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        data=ReplyInput(message="糟糕，虫量忽然增加了"),
+    )
+
+    assert response.response_type == "followup_result"
+    assert response.status == CaseStatus.ESCALATED
+    assert response.trend == FollowupTrend.WORSENING
+
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    compared = next(event for event in detail.events if event.event_type == EventType.FOLLOWUP_COMPARED)
+    assert compared.system_output["trend"] == "WORSENING"
+    assert compared.system_output["evidence"] == ["用户说虫量忽然增加"]
 
 
 def test_llm_harvest_correction_string_days_is_normalized(db_session, monkeypatch):

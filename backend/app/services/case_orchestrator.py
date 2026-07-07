@@ -110,7 +110,11 @@ class CaseOrchestrator:
         return response
 
     def submit_followup(
-        self, case_id: int, data: FollowupInput, record_response: bool = True
+        self,
+        case_id: int,
+        data: FollowupInput,
+        record_response: bool = True,
+        decision=None,
     ) -> CaseResponse:
         case = self._require_case(case_id)
         active = self.followups.active_for_case(case.id)
@@ -120,8 +124,13 @@ class CaseOrchestrator:
         if not semantic.get("followup_trend"):
             self._observe_semantics(case, data.description)
             semantic = (case.structured_data or {}).get("semantic_observation") or {}
-        trend = self._trend_from_semantic(semantic)
-        evidence = semantic.get("followup_evidence") or semantic.get("uncertainties") or ["Agent 已根据本轮语义判断复查趋势。"]
+        trend = self._trend_from_decision_or_semantic(decision, semantic)
+        evidence = (
+            getattr(decision, "followup_evidence", None)
+            or semantic.get("followup_evidence")
+            or semantic.get("uncertainties")
+            or ["Agent 已根据本轮语义和决策判断复查趋势。"]
+        )
         requested_state = self._state_for_trend(trend)
         if (
             CaseStatus(case.status) == CaseStatus.FOLLOWUP_PENDING
@@ -299,7 +308,7 @@ class CaseOrchestrator:
             return self._ask_more_info(case, decision)
         if decision.next_action == AgentAction.COMPARE_FOLLOWUP:
             followup_input = FollowupInput(description=message)
-            return self.submit_followup(case.id, followup_input, record_response=False)
+            return self.submit_followup(case.id, followup_input, record_response=False, decision=decision)
         if decision.next_action == AgentAction.ESCALATE:
             return self._escalate(case, decision.reason)
         if decision.next_action == AgentAction.CLOSE_CASE:
@@ -1293,6 +1302,11 @@ class CaseOrchestrator:
         if trend:
             return FollowupTrend(trend)
         raise AgentDecisionError("语义观察没有返回可用的复查趋势。")
+
+    def _trend_from_decision_or_semantic(self, decision, semantic: dict) -> FollowupTrend:
+        if decision is not None and getattr(decision, "followup_trend", None):
+            return FollowupTrend(decision.followup_trend)
+        return self._trend_from_semantic(semantic)
 
     def _followup_message(self, trend: FollowupTrend) -> str:
         if trend == FollowupTrend.IMPROVING:

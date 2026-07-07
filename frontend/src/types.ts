@@ -31,6 +31,8 @@ export interface AgentDecision {
   questions: string[];
   user_intent?: string;
   response_focus?: string[];
+  followup_trend?: FollowupTrend | null;
+  followup_evidence?: string[];
 }
 
 export interface Diagnosis {

@@ -50,6 +50,8 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
   "observation_points": ["复查观察点"],
   "escalation_conditions": ["升级条件"],
   "followup_after_days": 3,
+  "followup_trend": "COMPARE_FOLLOWUP 时必填：IMPROVING | UNCHANGED | WORSENING | INSUFFICIENT_INFO | NEEDS_HUMAN_CONFIRMATION",
+  "followup_evidence": ["COMPARE_FOLLOWUP 时说明趋势依据"],
   "chemical_safety_note": "用药安全边界",
   "harvest_safety_note": "采收安全边界",
   "plain_summary": "简洁摘要"

@@ -3,7 +3,7 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import get_settings
-from app.domain.enums import AgentAction, CaseStatus
+from app.domain.enums import AgentAction, CaseStatus, FollowupTrend
 from app.schemas.agent import AgentDecision, AgentDecisionContext
 from app.tools.llm_adapter import OpenAIAdapter
 
@@ -32,6 +32,8 @@ class LLMDecisionPayload(BaseModel):
     observation_points: list[str] = Field(default_factory=list)
     escalation_conditions: list[str] = Field(default_factory=list)
     followup_after_days: int | None = None
+    followup_trend: FollowupTrend | None = None
+    followup_evidence: list[str] = Field(default_factory=list)
     chemical_safety_note: str | None = None
     harvest_safety_note: str | None = None
     plain_summary: str | None = None
@@ -79,6 +81,8 @@ class AgentDecisionEngine:
                 observation_points=payload.observation_points,
                 escalation_conditions=payload.escalation_conditions,
                 followup_after_days=payload.followup_after_days,
+                followup_trend=payload.followup_trend,
+                followup_evidence=payload.followup_evidence,
                 chemical_safety_note=payload.chemical_safety_note,
                 harvest_safety_note=payload.harvest_safety_note,
                 plain_summary=payload.plain_summary,
@@ -123,6 +127,8 @@ class AgentDecisionEngine:
                 diagnosis_evidence=semantic.get("followup_evidence", []),
                 confidence_label=semantic.get("confidence"),
                 severity_label=semantic.get("severity"),
+                followup_trend=semantic.get("followup_trend"),
+                followup_evidence=semantic.get("followup_evidence", []),
                 plain_summary="用户正在描述本病例后续变化，需要比较趋势并调整处置和复查。",
                 guardrails=self._guardrails_for(context),
             )
@@ -173,7 +179,10 @@ class AgentDecisionEngine:
             "不要选择 CLOSE_CASE，除非用户明确要求停止跟踪该问题。"
             "返回字段：next_action, reason, confidence, requested_state, questions, observations_used, tool_plan, user_intent, response_focus,"
             "information_sufficient, problem_category, likely_causes, diagnosis_evidence, confidence_label, severity_label,"
-            "immediate_actions, observation_points, escalation_conditions, followup_after_days, chemical_safety_note, harvest_safety_note, plain_summary。"
+            "immediate_actions, observation_points, escalation_conditions, followup_after_days, followup_trend, followup_evidence,"
+            "chemical_safety_note, harvest_safety_note, plain_summary。"
+            "当 next_action 是 COMPARE_FOLLOWUP 时，必须给出 followup_trend 和 followup_evidence；"
+            "followup_trend 只能是 IMPROVING、UNCHANGED、WORSENING、INSUFFICIENT_INFO 或 NEEDS_HUMAN_CONFIRMATION。"
             f"\n上下文 JSON：{json.dumps(compact_context, ensure_ascii=False)}"
         )
 
@@ -206,6 +215,14 @@ class AgentDecisionEngine:
             decision.requested_state = CaseStatus.FOLLOWUP_REVIEW
             decision.user_intent = "followup_change_report"
             decision.response_focus = decision.response_focus or ["判断变化趋势", "根据变化调整方案"]
+            semantic = context.semantic_observation or {}
+            if not decision.followup_trend and semantic.get("followup_trend"):
+                decision.followup_trend = FollowupTrend(semantic["followup_trend"])
+            if not decision.followup_evidence and semantic.get("followup_evidence"):
+                decision.followup_evidence = semantic.get("followup_evidence", [])
+
+        if decision.next_action == AgentAction.COMPARE_FOLLOWUP and not decision.followup_trend:
+            raise AgentDecisionError("Agent 选择复查比较但没有给出 followup_trend。")
 
         if decision.next_action == AgentAction.ASK_MORE_INFO:
             decision.requested_state = CaseStatus.NEED_MORE_INFO

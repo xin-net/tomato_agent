@@ -95,6 +95,8 @@ class AgentDecisionRead(BaseModel):
     observation_points: list[str] = Field(default_factory=list)
     escalation_conditions: list[str] = Field(default_factory=list)
     followup_after_days: int | None = None
+    followup_trend: FollowupTrend | None = None
+    followup_evidence: list[str] = Field(default_factory=list)
     chemical_safety_note: str | None = None
     harvest_safety_note: str | None = None
     plain_summary: str | None = None
