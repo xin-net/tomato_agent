@@ -192,6 +192,7 @@ function AgentWorkbench() {
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
+  const [pendingMessagesByCase, setPendingMessagesByCase] = useState<Record<string, ChatMessage[]>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -216,6 +217,11 @@ function AgentWorkbench() {
   const [dueReminders, setDueReminders] = useState<Reminder[]>([]);
   const [remindersOpen, setRemindersOpen] = useState(false);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
+  const selectedCaseIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    selectedCaseIdRef.current = selectedCaseId;
+  }, [selectedCaseId]);
 
   const activeStatus = caseDetail?.status || messages.findLast((item) => item.response)?.response?.status;
   const composerStacked = input.split(/\r?\n/).length > 2 || input.length > 48 || imageUrls.length > 0;
@@ -244,19 +250,22 @@ function AgentWorkbench() {
   const refreshDetail = useCallback(async (caseId: number | null) => {
     if (!caseId || caseId < 0) {
       setCaseDetail(null);
+      if (caseId && caseId < 0) {
+        setMessages(pendingMessagesByCase[String(caseId)] || []);
+      }
       return;
     }
     setLoadingDetail(true);
     try {
       const detail = await getCase(caseId);
       setCaseDetail(detail);
-      setMessages(caseDetailToMessages(detail));
+      setMessages(mergeChatMessages(caseDetailToMessages(detail), pendingMessagesByCase[String(caseId)] || []));
     } catch (error) {
       message.error(error instanceof Error ? error.message : '病例详情加载失败');
     } finally {
       setLoadingDetail(false);
     }
-  }, []);
+  }, [pendingMessagesByCase]);
 
   useEffect(() => {
     void getSystemStatus()
@@ -331,6 +340,7 @@ function AgentWorkbench() {
       content: '正在观察症状、检查安全约束，并生成处理和复查计划...',
       pending: true,
     };
+    const pendingPair = [userMessage, pendingMessage];
     setMessages((current) => [...current, userMessage, pendingMessage]);
     scrollMessagesToBottom();
     if (!selectedCaseId) {
@@ -347,6 +357,11 @@ function AgentWorkbench() {
       setCases((current) => [optimisticCase, ...current.filter((item) => item.id !== optimisticCaseId)]);
       setSelectedCaseId(optimisticCaseId);
     }
+    const pendingCaseKey = String(selectedCaseId ?? optimisticCaseId);
+    setPendingMessagesByCase((current) => ({
+      ...current,
+      [pendingCaseKey]: mergeChatMessages(current[pendingCaseKey] || [], pendingPair),
+    }));
     setInput('');
     setImageUrls([]);
     setSending(true);
@@ -360,7 +375,20 @@ function AgentWorkbench() {
         image_urls: imageUrls,
         ...location,
       });
-      setSelectedCaseId(result.case_id);
+      const shouldStayOnSendingCase =
+        selectedCaseIdRef.current === selectedCaseId || selectedCaseIdRef.current === optimisticCaseId;
+      setPendingMessagesByCase((current) => {
+        const next = { ...current };
+        const pendingForCase = current[pendingCaseKey] || pendingPair;
+        delete next[pendingCaseKey];
+        if (!shouldStayOnSendingCase) {
+          next[String(result.case_id)] = pendingForCase;
+        }
+        return next;
+      });
+      if (shouldStayOnSendingCase) {
+        setSelectedCaseId(result.case_id);
+      }
       setCases((current) =>
         current
           .map((item) =>
@@ -379,9 +407,29 @@ function AgentWorkbench() {
       );
       void refreshCases();
       const detail = await getCase(result.case_id);
-      setCaseDetail(detail);
-      await streamAgentMessage(pendingId, responseToMessage(result.response), result.response);
+      if (shouldStayOnSendingCase) {
+        setCaseDetail(detail);
+        await streamAgentMessage(pendingId, responseToMessage(result.response), result.response);
+      } else {
+        setPendingMessagesByCase((current) => {
+          const next = { ...current };
+          delete next[String(result.case_id)];
+          return next;
+        });
+      }
     } catch (error) {
+      setPendingMessagesByCase((current) => ({
+        ...current,
+        [pendingCaseKey]: (current[pendingCaseKey] || pendingPair).map((item) =>
+          item.id === pendingId
+            ? {
+                ...item,
+                pending: false,
+                content: `这次 Agent 没有完成决策：${error instanceof Error ? error.message : '发送失败'}`,
+              }
+            : item,
+        ),
+      }));
       setMessages((current) =>
         current.map((item) =>
           item.id === pendingId
@@ -963,8 +1011,27 @@ function LoginPage({
   );
 }
 
+function mergeChatMessages(base: ChatMessage[], overlay: ChatMessage[]): ChatMessage[] {
+  const seen = new Set<string>();
+  return [...base, ...overlay].filter((item) => {
+    const signature = `${item.id}|${item.role}|${item.content}`;
+    if (seen.has(signature)) return false;
+    seen.add(signature);
+    return true;
+  });
+}
+
 function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
-  const events = detail.events;
+  const events = [...detail.events].sort((left, right) => {
+    const timeDiff = new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return left.id - right.id;
+  });
+  const userMessageInputs = new Set(
+    events
+      .filter((event) => event.event_type === 'USER_MESSAGE' && event.user_input)
+      .map((event) => normalizeMessageText(event.user_input || '')),
+  );
   const hasAgentResponses = events.some((event) => event.event_type === 'AGENT_RESPONSE');
   const messagesFromEvents = events.flatMap((event, index): ChatMessage[] => {
     if (event.event_type === 'USER_MESSAGE') {
@@ -982,6 +1049,7 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
     }
 
     if (event.event_type === 'FOLLOWUP_SUBMITTED') {
+      if (userMessageInputs.has(normalizeMessageText(event.user_input || ''))) return [];
       return [
         {
           id: `event-${event.id}`,
@@ -1072,6 +1140,10 @@ function caseDetailToMessages(detail: CaseDetail): ChatMessage[] {
       content: '这个病例来自旧版本事件记录，暂无可回放的完整对话。请查看右侧事件时间线。',
     },
   ];
+}
+
+function normalizeMessageText(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function legacyPlanMessage(detail: CaseDetail) {
@@ -1266,7 +1338,7 @@ function environmentSummary(detail: CaseDetail) {
 }
 
 function stageSummary(detail: CaseDetail) {
-  return detail.growth_stage || '暂未识别出';
+  return readableTextOrFallback(detail.growth_stage);
 }
 
 function harvestSummary(detail: CaseDetail) {
@@ -1275,6 +1347,18 @@ function harvestSummary(detail: CaseDetail) {
   if (detail.days_to_harvest == null) return '暂未识别出';
   if (vision?.harvest_hint) return `${detail.days_to_harvest} 天 · ${vision.harvest_hint}`;
   return `${detail.days_to_harvest} 天`;
+}
+
+function readableTextOrFallback(value?: string | null, fallback = '暂未识别出') {
+  if (!value) return fallback;
+  const text = String(value).trim();
+  if (!text) return fallback;
+  if (/[�]/.test(text)) return fallback;
+  const suspiciousMatches = text.match(/[鐣鎴鍙绂鏋闇澶浣]/g);
+  if (suspiciousMatches && suspiciousMatches.length >= Math.max(2, Math.ceil(text.length * 0.25))) {
+    return fallback;
+  }
+  return text;
 }
 
 function CompactList({ label, values }: { label: string; values?: string[] }) {
