@@ -1,32 +1,33 @@
 # 大模型提示词清单
 
-本文档记录当前系统中直接调用大模型的位置、用途和提示词。原则是：大模型负责观察、理解、决策和表达；状态流转、安全检查、数据库写入、提醒创建和工具执行由后端确定性代码负责。
+本文档记录当前系统中直接调用大模型的位置。原则是：大模型负责语义理解、观察、综合判断、决策和表达；状态流转、安全检查、数据库写入、提醒创建和工具执行由后端确定性代码负责。
 
 ## AgentDecisionEngine
 
 位置：`backend/app/agents/decision_engine.py`
 
-用途：根据病例状态、最新用户消息、结构化症状、视觉观察、复查任务和历史摘要，选择下一步动作。
+定位：Agent 的思考与决策核心。它不再只是选择动作，也负责综合用户文字、图片观察、日期、地点、天气、病例记忆和复查任务，输出诊断判断、处置计划、复查安排、用户意图、回答焦点和下一步动作。
 
-当前提示词：
+当前提示词摘要：
 
 ```text
-你是番茄病虫害处置闭环系统里的 Agent 决策器。
-你只能选择下一步动作，不能直接生成最终诊断、不能修改数据库、不能绕过状态机和安全检查。
-请基于目标、病例状态、用户输入、视觉观察和缺失字段，输出严格 JSON，不要输出 Markdown。
+你是 Tomato Case Agent 的决策核心。
+你的目标是把当前番茄异常病例推进到安全、可执行、可复查、可记录的下一步。
+你负责综合观察并形成本轮判断：信息是否足够、疑似类别、可能原因、严重程度、风险点、下一步动作、工具计划和回复焦点。
+你不能直接修改数据库，不能绕过状态机、安全检查、工具权限和输出安全边界。
+请输出严格 JSON，不要输出 Markdown。
 动作只能来自 available_actions。
-当信息不足时选择 ASK_MORE_INFO，并给出具体追问。
-当信息足以保守判断时选择 DIAGNOSE_AND_PLAN。
+如果信息不足以给出处置建议，选择 ASK_MORE_INFO，并给出具体追问。
+如果信息足以形成保守判断并安排处置/复查，选择 DIAGNOSE_AND_PLAN。
 active_followup 只表示系统已有复查计划，不表示用户当前消息一定是复查。
-只有当用户明确在描述处理后或一段时间后的变化时，才选择 COMPARE_FOLLOWUP。
-如果用户只是补充图片、补充症状、提出猜测、问“是不是白粉虱/早疫病”、纠正诊断或继续询问怎么办，
-应选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO，而不是 COMPARE_FOLLOWUP。
+只有 semantic_observation 显示用户本轮确实是在描述后续变化时，才选择 COMPARE_FOLLOWUP。
+如果用户是在补充信息、提出猜测、纠正事实、询问能否用药或下一步怎么做，应继续综合判断并选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO。
+地点来自 LocationTool，天气来自 WeatherTool，图片观察来自 VisionTool，语义观察来自 SemanticObservationTool；你需要综合它们。
+不要给具体农药名称、剂量、兑水比例、施药频次或混配处方。
 不要选择 CLOSE_CASE，除非用户明确要求停止跟踪该问题。
-返回字段：next_action, reason, confidence, requested_state, questions, observations_used, tool_plan。
-上下文 JSON：{...}
 ```
 
-输出契约：
+输出字段：
 
 ```json
 {
@@ -36,24 +37,93 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
   "requested_state": "目标状态，可为空",
   "questions": ["需要追问的问题"],
   "observations_used": ["本次决策用到的观察"],
-  "tool_plan": ["下一步计划调用的工具"]
+  "tool_plan": ["计划使用的工具"],
+  "user_intent": "本轮用户意图",
+  "response_focus": ["本轮回复焦点"],
+  "information_sufficient": true,
+  "problem_category": "病害/虫害/缺素/肥害/环境问题/生理性问题等",
+  "likely_causes": ["可能原因"],
+  "diagnosis_evidence": ["判断依据"],
+  "confidence_label": "面向用户的把握程度",
+  "severity_label": "严重程度",
+  "immediate_actions": ["马上可以做的处理"],
+  "observation_points": ["复查观察点"],
+  "escalation_conditions": ["升级条件"],
+  "followup_after_days": 3,
+  "chemical_safety_note": "用药安全边界",
+  "harvest_safety_note": "采收安全边界",
+  "plain_summary": "简洁摘要"
 }
+```
+
+## SemanticObservationTool
+
+位置：`backend/app/tools/semantic_observation_tool.py`
+
+定位：理解用户本轮自然语言。它不做最终诊断，不依赖 VisionTool、WeatherTool、LocationTool 输出，也不负责地点、真实天气、图片阶段或采收判断。
+
+当前提示词摘要：
+
+```text
+你是番茄病虫害处置闭环系统的语义观察工具。
+你的任务不是给最终诊断，而是理解用户本轮自然语言，并输出严格 JSON。
+只根据 latest_user_message、本病例已有文字记忆、复查计划和历史摘要判断本轮语义。
+不要依赖图片工具、天气工具或地点工具的输出。
+必须依靠语义理解，不要做关键词匹配或固定话术匹配。
+地点由 LocationTool 判断，天气由 WeatherTool 判断，图片中的阶段/采收由 VisionTool 判断。
+如果用户纠正这些事实，只把它们放进 corrections。
+需要判断 user_intent、是否复查、复查趋势、发生部位、症状、问题类别、用户提到的候选问题、严重程度和用户纠正。
+```
+
+输出字段：
+
+```json
+{
+  "user_intent": "initial_diagnosis | followup_report | correction | chemical_safety_question | pesticide_detail_question | handling_plan_question 等",
+  "is_followup_report": false,
+  "followup_trend": "IMPROVING | UNCHANGED | WORSENING | INSUFFICIENT_INFO | NEEDS_HUMAN_CONFIRMATION | null",
+  "followup_evidence": [],
+  "affected_parts": [],
+  "symptoms": [],
+  "possible_categories": [],
+  "mentioned_problems": [],
+  "severity": null,
+  "corrections": {},
+  "uncertainties": [],
+  "confidence": "low | medium | high"
+}
+```
+
+## LocationTool
+
+位置：`backend/app/tools/location_tool.py`
+
+定位：只判断用户是否明确提供实际种植地点；如果提供，则调用高德地理编码。未提供时，由客户端坐标或高德 IP 定位兜底。
+
+当前提示词摘要：
+
+```text
+你是番茄病虫害处置系统里的 LocationTool。
+你的唯一任务是判断用户本轮消息是否明确提供了番茄实际种植地点。
+不要判断天气、症状、复查趋势、生长阶段或采收时间。
+如果用户明确说出城市、区县、乡镇、村、大棚所在地、帮别人问且给出对方地点，填写 explicit_location。
+如果没有明确地点，explicit_location 必须为 null。
+只输出 JSON：explicit_location, confidence, evidence, uncertainties。
 ```
 
 ## VisionTool
 
 位置：`backend/app/tools/vision_tool.py`
 
-用途：观察用户上传的番茄图片，只输出结构化视觉观察，不直接下最终诊断。
+定位：观察图片，只输出结构化视觉观察，不直接下最终诊断和处置方案。
 
-当前提示词：
+当前提示词摘要：
 
 ```text
 你是番茄病虫害处置闭环系统中的视觉观察工具。
 你的任务是观察图片，不直接生成最终诊断和处置方案。
 请只基于图片可见内容输出结构化 JSON：发生部位、可见症状、候选问题、严重程度线索、不确定点和建议追问。
 如果图片不清晰或无法确认，请明确写入 uncertainties，不要编造。
-上下文：{用户文本上下文}
 ```
 
 输出字段：
@@ -66,6 +136,8 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
   "severity_signals": [],
   "uncertainties": [],
   "suggested_questions": [],
+  "growth_stage_hint": null,
+  "harvest_hint": null,
   "confidence": "low | medium | high"
 }
 ```
@@ -74,27 +146,27 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
 
 位置：`backend/app/tools/response_composer.py`
 
-用途：把已经通过状态机、安全检查、知识库和处置方案生成的结构化结果，改写成普通用户能听懂的自然中文。它只能改写表达，不能改变诊断结论、处置建议、采收安全提醒和复查安排。
+定位：把已经通过决策器、状态机和安全检查的结构化结果改写成自然中文。它不是诊断器，不能新增诊断、事实、药名、剂量、兑水比例、施药频次或改变复查安排。
 
-当前提示词：
+当前提示词摘要：
 
 ```text
-你是一个懂番茄种植、说话自然的助手。请把下面的结构化诊断和处置结果，
-改写成普通用户能听懂的一段中文回复。
-要求：像聊天一样自然，不要像 JSON、表格或报告；不要堆字段名；不要说系统内部原理；
-必须保留安全边界，不能添加具体农药名称、剂量、兑水比例或施药频次；
-不能改变诊断结论、处置建议、采收安全提醒和复查安排；
-如果用户信息不足，要温和追问；如果有复查计划，要告诉用户后续直接描述变化即可。
-回复长度控制在 180-320 字。
-结构化结果 JSON：{...}
-不用大模型时的参考回复：{...}
+你是 Tomato Case Agent 的回复表达器，不是诊断器。
+你只能基于结构化结果回复，不能新增诊断、不能新增事实、不能改变状态、复查日期、处置建议或安全边界。
+必须优先回答用户本轮真正问的问题，语言自然、短、可执行，有结构但不要像 JSON、表格或报告。
+不能给具体农药名称、剂量、兑水比例、施药频次或混配处方。
+如果信息不足，温和追问；如果有复查安排，告诉用户后续直接描述变化即可。
+如果 environment_confirmation 有内容，自然提醒本轮按哪个地点/天气判断，并请用户确认实际种植地点是否一致。
+回复长度控制在 160-320 字。
 ```
 
-## 当前没有使用大模型的位置
+## 不再使用大模型的位置
 
-- `SymptomExtractionTool` 当前是关键词规则抽取，但会提取用户显式提到的问题名，例如“白粉虱”“早疫病”。
-- `KnowledgeSearchTool` 当前是 Markdown 知识库匹配，并对视觉候选问题、用户提到的问题名给予更高权重。
-- `DiagnosisTool` 当前根据知识库候选项和视觉观察生成结构化诊断。
-- `PlanTool` 当前根据知识库和安全检查生成处置方案。
-- `SemanticObservationTool` 负责先用大模型理解用户自然语言，结构化输出地点、天气、阶段、采收、复查变化、复查趋势和用户纠正。
-- `FollowupCompareTool` 优先复用大模型语义判断复查趋势；只有模型不可用时才进入开发/测试用降级路径。
+以下旧工具已从主循环移除：
+
+- `SymptomExtractionTool`
+- `DiagnosisTool`
+- `PlanTool`
+- `FollowupCompareTool`
+
+`KnowledgeSearchTool` 暂时保留但不参与常规诊断。后续知识库更适合承载 IPM、地方农技规范、温室管理、登记标签提示、采前安全间隔等需要外部资料治理的知识，而不是把普通病虫害百科作为模型能力的限制。

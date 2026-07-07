@@ -32,14 +32,10 @@ from app.schemas.cases import (
 )
 from app.tools.calendar_reminder_tool import CalendarReminderTool
 from app.tools.date_tool import DateTool
-from app.tools.diagnosis_tool import DiagnosisTool, PlanTool
-from app.tools.followup_compare_tool import FollowupCompareTool
-from app.tools.knowledge_search_tool import KnowledgeSearchTool
 from app.tools.location_tool import LocationTool
 from app.tools.response_composer import ResponseComposer
 from app.tools.registry import ToolRegistry
 from app.tools.semantic_observation_tool import SemanticObservationTool
-from app.tools.symptom_extraction_tool import SymptomExtractionTool
 from app.tools.vision_tool import VisionTool
 from app.tools.weather_tool import WeatherTool
 
@@ -51,14 +47,9 @@ class CaseOrchestrator:
         self.events = EventRepository(db)
         self.followups = FollowupRepository(db)
         self.reminders = ReminderRepository(db)
-        self.extractor = SymptomExtractionTool()
         self.decision_engine = AgentDecisionEngine()
-        self.knowledge = KnowledgeSearchTool()
-        self.diagnosis_tool = DiagnosisTool()
-        self.plan_tool = PlanTool()
         self.response_composer = ResponseComposer()
         self.semantic_observation_tool = SemanticObservationTool()
-        self.followup_compare = FollowupCompareTool()
         self.vision_tool = VisionTool()
         self.weather_tool = WeatherTool()
         self.location_tool = LocationTool()
@@ -125,12 +116,12 @@ class CaseOrchestrator:
         active = self.followups.active_for_case(case.id)
         self.events.append(case.id, EventType.FOLLOWUP_SUBMITTED, user_input=data.description)
 
-        trend, evidence = self._call_tool(
-            case.id,
-            "FollowupCompareTool",
-            lambda: self.followup_compare.compare(data),
-            input_summary={"description_length": len(data.description)},
-        )
+        semantic = (case.structured_data or {}).get("semantic_observation") or {}
+        if not semantic.get("followup_trend"):
+            self._observe_semantics(case, data.description)
+            semantic = (case.structured_data or {}).get("semantic_observation") or {}
+        trend = self._trend_from_semantic(semantic)
+        evidence = semantic.get("followup_evidence") or semantic.get("uncertainties") or ["Agent 已根据本轮语义判断复查趋势。"]
         requested_state = self._state_for_trend(trend)
         if (
             CaseStatus(case.status) == CaseStatus.FOLLOWUP_PENDING
@@ -349,41 +340,25 @@ class CaseOrchestrator:
                 "raw": existing_structured.get("raw", {}),
             }
         )
-        entries = self._call_tool(
-            case.id,
-            "KnowledgeSearchTool",
-            lambda: self.knowledge.search(structured),
-            input_summary={
-                "affected_parts": structured.affected_parts,
-                "symptoms": structured.symptoms,
-                "mentioned_problems": structured.raw.get("mentioned_problems", []),
-            },
-        )
-        diagnosis = self._call_tool(
-            case.id,
-            "DiagnosisTool",
-            lambda: self.diagnosis_tool.diagnose(
-                entries,
-                multimodal_observation=existing_structured.get("multimodal_observation"),
-            ),
-            input_summary={
-                "candidate_count": len(entries),
-                "multimodal": bool(existing_structured.get("multimodal_observation")),
-            },
+        likely_causes = decision.likely_causes or ["信息不足"]
+        diagnosis = DiagnosisRead(
+            suspected_problem=likely_causes[0] if likely_causes else None,
+            likelihood=decision.confidence_label or decision.confidence,
+            evidence=decision.diagnosis_evidence or decision.observations_used,
+            confusions=[],
         )
         case.suspected_problem = diagnosis.suspected_problem
         case.likelihood = diagnosis.likelihood
 
         weather_observation = existing_structured.get("weather_observation") or {}
-        weather_risk_signals = weather_observation.get("risk_signals", [])
         safety_context = SafetyContext(
             days_to_harvest=case.days_to_harvest,
             recent_pesticide_use=case.recent_pesticide_use,
             environment=case.environment,
             suspected_problem=diagnosis.suspected_problem,
-            severity=case.severity or structured.severity,
+            severity=decision.severity_label or case.severity or structured.severity,
             uncertain=diagnosis.likelihood in {"较低", None},
-            weather_risk_signals=weather_risk_signals,
+            weather_risk_signals=[],
         )
         safety_result = self._call_tool(
             case.id,
@@ -392,8 +367,7 @@ class CaseOrchestrator:
             input_summary={
                 "days_to_harvest": case.days_to_harvest,
                 "suspected_problem": diagnosis.suspected_problem,
-                "severity": case.severity or structured.severity,
-                "weather_risk_signals": weather_risk_signals,
+                "severity": decision.severity_label or case.severity or structured.severity,
             },
         )
         self.events.append(
@@ -405,15 +379,17 @@ class CaseOrchestrator:
         if safety_result.must_escalate:
             return self._escalate(case, "安全检查要求升级人工确认")
 
-        entry = entries[0] if entries else None
-        plan = self._call_tool(
-            case.id,
-            "PlanTool",
-            lambda: self.plan_tool.build_plan(entry, safety_result.warnings, weather_observation),
-            input_summary={
-                "problem": entry.problem_name if entry else None,
-                "safety_warning_count": len(safety_result.warnings),
-            },
+        plan = PlanRead(
+            summary=decision.plain_summary or f"当前更像{diagnosis.suspected_problem or '番茄异常'}，建议按保守方案处理。",
+            immediate_actions=decision.immediate_actions,
+            observation_points=decision.observation_points,
+            escalation_conditions=decision.escalation_conditions,
+            safety_warnings=[
+                *(safety_result.warnings or []),
+                *([decision.chemical_safety_note] if decision.chemical_safety_note else []),
+                *([decision.harvest_safety_note] if decision.harvest_safety_note else []),
+            ],
+            followup_after_days=decision.followup_after_days,
         )
         case.current_plan = plan.model_dump()
         self.events.append(case.id, EventType.DIAGNOSIS_GENERATED, system_output=diagnosis.model_dump())
@@ -465,7 +441,7 @@ class CaseOrchestrator:
         advice = self._build_diagnosis_advice(
             case=case,
             structured=structured,
-            entry=entry,
+            category=decision.problem_category,
             diagnosis=diagnosis,
             plan=plan,
             safety_result=safety_result,
@@ -621,10 +597,8 @@ class CaseOrchestrator:
         location_error: str | None = None,
     ) -> None:
         semantic = (case.structured_data or {}).get("semantic_observation") or {}
-        text_observation = self.extractor.extract(message)
-        raw = {**text_observation.raw, **self._semantic_raw(semantic)}
+        raw = self._semantic_raw(semantic)
         explicit_location = raw.get("location_text")
-        explicit_weather = raw.get("recent_weather") or case.recent_weather
         previous_weather = (case.structured_data or {}).get("weather_observation") or {}
 
         location_observation = self._call_tool(
@@ -642,6 +616,7 @@ class CaseOrchestrator:
                 explicit_location=explicit_location,
                 previous_location=previous_weather.get("location"),
                 previous_location_source=previous_weather.get("location_source"),
+                previous_adcode=previous_weather.get("adcode"),
             ),
             input_summary={
                 "explicit_location": explicit_location,
@@ -655,6 +630,9 @@ class CaseOrchestrator:
         latitude = location_observation.latitude
         longitude = location_observation.longitude
         location_error = location_observation.location_error
+        current = dict(case.structured_data or {})
+        current["location_observation"] = location_observation.model_dump()
+        case.structured_data = current
 
         observation = self._call_tool(
             case.id,
@@ -662,18 +640,17 @@ class CaseOrchestrator:
             lambda: self.tool_registry.call(
                 "WeatherTool",
                 location=location,
-                user_description=message,
+                adcode=location_observation.adcode,
                 latitude=latitude,
                 longitude=longitude,
                 location_source=resolved_source,
                 location_error=location_error,
-                explicit_weather=explicit_weather,
             ),
             input_summary={
                 "location": location,
                 "location_source": resolved_source,
+                "adcode": location_observation.adcode,
                 "location_error": location_error,
-                "explicit_weather": explicit_weather,
                 "message_length": len(message),
                 "has_coordinates": latitude is not None and longitude is not None,
             },
@@ -684,10 +661,14 @@ class CaseOrchestrator:
         current = dict(case.structured_data or {})
         current["weather_observation"] = observation.model_dump()
         case.structured_data = current
-        if explicit_weather:
-            case.recent_weather = explicit_weather
-        elif observation.risk_signals and not case.recent_weather:
-            case.recent_weather = "；".join(observation.risk_signals)
+        if observation.status == "live_weather":
+            weather_text = " ".join(
+                str(item)
+                for item in [observation.weather, observation.temperature, observation.humidity]
+                if item not in (None, "")
+            )
+            if weather_text:
+                case.recent_weather = weather_text
         self.events.append(
             case.id,
             EventType.WEATHER_OBSERVED,
@@ -839,13 +820,13 @@ class CaseOrchestrator:
         self,
         case,
         structured: StructuredSymptoms,
-        entry,
+        category: str | None,
         diagnosis: DiagnosisRead,
         plan: PlanRead,
         safety_result,
         followup,
     ) -> ClosedLoopAdvice:
-        category = entry.category if entry else self._category_from_structured(case.structured_data or {})
+        category = category or self._category_from_structured(case.structured_data or {})
         severity = self._severity_label(case.severity or structured.severity, safety_result.risk_level)
         action_mode = self._action_mode(severity, safety_result.risk_level)
         harvest_safety = self._harvest_safety_text(case.days_to_harvest, safety_result.warnings)
@@ -937,11 +918,17 @@ class CaseOrchestrator:
                 severity=semantic.get("severity"),
                 raw=raw,
             )
-        fallback = self.extractor.extract(message)
-        fallback.raw["semantic_observation_status"] = semantic.get("status", "not_run")
-        if semantic.get("uncertainties"):
-            fallback.raw["semantic_uncertainties"] = semantic.get("uncertainties")
-        return fallback
+        return StructuredSymptoms(
+            affected_parts=[],
+            symptoms=[],
+            possible_categories=[],
+            missing_fields=[],
+            severity=None,
+            raw={
+                "semantic_observation_status": semantic.get("status", "not_run"),
+                "semantic_uncertainties": semantic.get("uncertainties", []),
+            },
+        )
 
     def _semantic_raw(self, semantic: dict) -> dict:
         raw: dict[str, Any] = {}
@@ -988,7 +975,11 @@ class CaseOrchestrator:
         if source == "case_memory_user_location":
             return f"我继续按这个病例之前确认的地点「{location}」来判断：{weather_text}。如果植株不在那里，请告诉我实际地点。"
         if status == "live_weather":
-            return f"我这轮按浏览器定位附近「{location}」的实时天气来判断：{weather_text}。如果番茄不在你当前位置，请告诉我实际地点和最近天气。"
+            if source in {"browser", "browser_failed", "browser_unavailable"}:
+                return f"我这轮按客户端定位附近「{location}」的实时天气来判断：{weather_text}。如果番茄不在你当前位置，请告诉我实际地点和最近天气。"
+            if source == "amap_ip":
+                return f"我这轮按 IP 定位推断的「{location}」实时天气来判断：{weather_text}。IP 定位通常只到城市级，如果植株不在这里，请直接告诉我实际地点。"
+            return f"我这轮按「{location}」的实时天气来判断：{weather_text}。如果地点不对，请告诉我实际种植地点。"
         return f"地点/天气还没有确认，我暂按「{location}」和你文字里的天气线索判断。若植株不在当前位置，请直接补充实际地点和最近天气。"
 
     def _category_from_structured(self, structured_data: dict) -> str | None:
@@ -1296,6 +1287,12 @@ class CaseOrchestrator:
         if trend == FollowupTrend.INSUFFICIENT_INFO:
             return CaseStatus.NEED_MORE_INFO
         return CaseStatus.FOLLOWUP_REVIEW
+
+    def _trend_from_semantic(self, semantic: dict) -> FollowupTrend:
+        trend = semantic.get("followup_trend")
+        if trend:
+            return FollowupTrend(trend)
+        raise AgentDecisionError("语义观察没有返回可用的复查趋势。")
 
     def _followup_message(self, trend: FollowupTrend) -> str:
         if trend == FollowupTrend.IMPROVING:

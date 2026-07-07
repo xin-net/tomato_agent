@@ -352,14 +352,31 @@ function AgentWorkbench() {
     setSending(true);
     try {
       const location = await getBrowserLocation();
+      const requestCaseId = selectedCaseId && selectedCaseId > 0 ? selectedCaseId : undefined;
       const result = await sendConversationMessage({
         user_id: userId,
-        case_id: selectedCaseId,
+        case_id: requestCaseId,
         message: content,
         image_urls: imageUrls,
         ...location,
       });
       setSelectedCaseId(result.case_id);
+      setCases((current) =>
+        current
+          .map((item) =>
+            item.id === optimisticCaseId
+              ? {
+                  ...item,
+                  id: result.case_id,
+                  suspected_problem: result.response.diagnosis?.suspected_problem || item.suspected_problem,
+                  status: result.response.status,
+                  followup_date: result.response.followup?.due_date || item.followup_date,
+                  updated_at: new Date().toISOString(),
+                }
+              : item,
+          )
+          .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index),
+      );
       void refreshCases();
       const detail = await getCase(result.case_id);
       setCaseDetail(detail);

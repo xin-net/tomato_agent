@@ -85,6 +85,19 @@ class AgentDecisionRead(BaseModel):
     response_focus: list[str] = Field(default_factory=list)
     guardrails: list[str] = Field(default_factory=list)
     fallback_reason: str | None = None
+    information_sufficient: bool | None = None
+    problem_category: str | None = None
+    likely_causes: list[str] = Field(default_factory=list)
+    diagnosis_evidence: list[str] = Field(default_factory=list)
+    confidence_label: str | None = None
+    severity_label: str | None = None
+    immediate_actions: list[str] = Field(default_factory=list)
+    observation_points: list[str] = Field(default_factory=list)
+    escalation_conditions: list[str] = Field(default_factory=list)
+    followup_after_days: int | None = None
+    chemical_safety_note: str | None = None
+    harvest_safety_note: str | None = None
+    plain_summary: str | None = None
 
 
 class SafetyResultRead(BaseModel):

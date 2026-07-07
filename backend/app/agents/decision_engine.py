@@ -22,6 +22,19 @@ class LLMDecisionPayload(BaseModel):
     tool_plan: list[str] = Field(default_factory=list)
     user_intent: str = "initial_diagnosis"
     response_focus: list[str] = Field(default_factory=list)
+    information_sufficient: bool | None = None
+    problem_category: str | None = None
+    likely_causes: list[str] = Field(default_factory=list)
+    diagnosis_evidence: list[str] = Field(default_factory=list)
+    confidence_label: str | None = None
+    severity_label: str | None = None
+    immediate_actions: list[str] = Field(default_factory=list)
+    observation_points: list[str] = Field(default_factory=list)
+    escalation_conditions: list[str] = Field(default_factory=list)
+    followup_after_days: int | None = None
+    chemical_safety_note: str | None = None
+    harvest_safety_note: str | None = None
+    plain_summary: str | None = None
 
 
 class AgentDecisionEngine:
@@ -56,6 +69,19 @@ class AgentDecisionEngine:
                 tool_plan=payload.tool_plan,
                 user_intent=payload.user_intent,
                 response_focus=payload.response_focus,
+                information_sufficient=payload.information_sufficient,
+                problem_category=payload.problem_category,
+                likely_causes=payload.likely_causes,
+                diagnosis_evidence=payload.diagnosis_evidence,
+                confidence_label=payload.confidence_label,
+                severity_label=payload.severity_label,
+                immediate_actions=payload.immediate_actions,
+                observation_points=payload.observation_points,
+                escalation_conditions=payload.escalation_conditions,
+                followup_after_days=payload.followup_after_days,
+                chemical_safety_note=payload.chemical_safety_note,
+                harvest_safety_note=payload.harvest_safety_note,
+                plain_summary=payload.plain_summary,
                 guardrails=self._guardrails_for(context),
             )
             return self._sanitize_llm_decision(decision, baseline, context)
@@ -63,7 +89,6 @@ class AgentDecisionEngine:
             raise AgentDecisionError(f"Agent 决策输出不可用：{exc}") from exc
 
     def _rule_decide(self, context: AgentDecisionContext) -> AgentDecision:
-        intent, focus = self._infer_turn_focus(context)
         if context.case_status == CaseStatus.CLOSED:
             return AgentDecision(
                 next_action=AgentAction.ESCALATE,
@@ -78,8 +103,6 @@ class AgentDecisionEngine:
                 guardrails=self._guardrails_for(context),
             )
 
-        missing = self._effective_missing_fields(context)
-        high_confidence_vision = self._has_high_confidence_vision(context)
         if self._is_followup_change_message(context):
             semantic = context.semantic_observation or {}
             return AgentDecision(
@@ -89,47 +112,31 @@ class AgentDecisionEngine:
                 confidence="high",
                 decision_source="semantic_guardrail" if semantic.get("is_configured") else "rule",
                 observations_used=self._observation_summary(context),
-                tool_plan=["DateTool", "FollowupCompareTool", "StateMachine", "CalendarReminderTool", "EventMemory"],
+                tool_plan=["SemanticObservationTool", "DateTool", "StateMachine", "CalendarReminderTool", "EventMemory"],
                 user_intent="followup_change_report",
-                response_focus=["判断变化趋势", "如果虫量变多则升级处理", "调整复查和提醒"],
-                guardrails=self._guardrails_for(context),
-            )
-
-        if {"发生部位", "生长阶段"}.issubset(missing) or (
-            len(missing) >= 3 and not high_confidence_vision
-        ):
-            questions = [
-                "异常主要出现在老叶、新叶、叶背、茎、花还是果实？",
-                "斑点是什么颜色和形态？是否有同心轮纹或霉层？",
-                "番茄目前处于苗期、开花期、结果期还是采收期？",
-                "最近是否施肥、喷药，距离预计采收还有几天？",
-            ]
-            if high_confidence_vision:
-                questions = context.vision_observation.get("suggested_questions") or questions[2:]
-            return AgentDecision(
-                next_action=AgentAction.ASK_MORE_INFO,
-                reason="缺少发生部位、生长阶段、采收时间或近期用药等关键信息。",
-                requested_state=CaseStatus.NEED_MORE_INFO,
-                questions=questions,
-                confidence="high",
-                decision_source="rule",
-                observations_used=self._observation_summary(context),
-                tool_plan=["Questions", "StateMachine", "EventMemory"],
-                user_intent=intent,
-                response_focus=focus or ["追问缺失信息", "暂不建议直接用药"],
+                response_focus=["判断变化趋势", "根据好转或加重调整处置", "调整复查和提醒"],
+                information_sufficient=True,
+                problem_category=semantic.get("possible_categories", [None])[0]
+                if semantic.get("possible_categories")
+                else None,
+                likely_causes=semantic.get("mentioned_problems", []),
+                diagnosis_evidence=semantic.get("followup_evidence", []),
+                confidence_label=semantic.get("confidence"),
+                severity_label=semantic.get("severity"),
+                plain_summary="用户正在描述本病例后续变化，需要比较趋势并调整处置和复查。",
                 guardrails=self._guardrails_for(context),
             )
 
         return AgentDecision(
             next_action=AgentAction.DIAGNOSE_AND_PLAN,
-            reason="当前信息足以形成保守的初步判断并创建复查计划。",
+            reason="等待 LLM 决策；此 baseline 只用于动作白名单和安全边界。",
             requested_state=CaseStatus.FOLLOWUP_PENDING,
-            confidence="medium",
-            decision_source="rule",
+            confidence="low",
+            decision_source="baseline",
             observations_used=self._observation_summary(context),
-            tool_plan=self._tool_plan_for_intent(intent),
-            user_intent=intent,
-            response_focus=focus,
+            tool_plan=["SafetyChecker", "CalendarReminderTool", "ResponseComposer"],
+            user_intent="unknown",
+            response_focus=["由 LLM 决定本轮回答焦点"],
             guardrails=self._guardrails_for(context),
         )
 
@@ -150,27 +157,23 @@ class AgentDecisionEngine:
             "baseline_rule_decision": baseline.model_dump(mode="json"),
         }
         return (
-            "你是番茄病虫害处置闭环系统里的 Agent 决策器。"
-            "你只能选择下一步动作，不能直接生成最终诊断、不能修改数据库、不能绕过状态机和安全检查。"
-            "请基于目标、病例状态、用户输入、视觉观察和缺失字段，输出严格 JSON，不要输出 Markdown。"
+            "你是 Tomato Case Agent 的决策核心。"
+            "你的目标是把当前番茄异常病例推进到安全、可执行、可复查、可记录的下一步。"
+            "你负责综合观察并形成本轮判断：信息是否足够、疑似类别、可能原因、严重程度、风险点、下一步动作、工具计划和回复焦点。"
+            "你不能直接修改数据库，不能绕过状态机、安全检查、工具权限和输出安全边界。"
+            "请输出严格 JSON，不要输出 Markdown。"
             "动作只能来自 available_actions。"
-            "当信息不足时选择 ASK_MORE_INFO，并给出具体追问。"
-            "当信息足以保守判断时选择 DIAGNOSE_AND_PLAN。"
+            "如果信息不足以给出处置建议，选择 ASK_MORE_INFO，并给出具体追问。"
+            "如果信息足以形成保守判断并安排处置/复查，选择 DIAGNOSE_AND_PLAN。"
             "active_followup 只表示系统已有复查计划，不表示用户当前消息一定是复查。"
-            "只有当用户明确在描述处理后或一段时间后的变化时，才选择 COMPARE_FOLLOWUP，"
-            "例如：复查、按你说处理后、剪掉病叶后、三天后、没有新增、变多、扩散、好转、恶化、稳定。"
-            "如果用户只是补充图片、补充症状、提出猜测、问“是不是白粉虱/早疫病”、纠正诊断或继续询问怎么办，"
-            "应选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO，而不是 COMPARE_FOLLOWUP。"
-            "你还必须判断本轮用户意图 user_intent 和回答焦点 response_focus。"
-            "semantic_observation 是上一层大模型语义观察结果，只负责本轮意图、复查变化、用户纠正和症状语义；"
-            "地点、天气、视觉阶段/采收来自对应工具，你应综合这些观察，而不是做关键词猜测。"
-            "如果用户追问“能不能用药、能不能打药、采收前能否用药”，user_intent 应为 chemical_safety_question，"
-            "response_focus 应聚焦采收安全、是否适合用药、安全边界和下一步观察，不要重复完整诊断。"
-            "如果用户追问“用什么药、推荐药名、剂量、兑水、频次”，user_intent 应为 pesticide_detail_question，"
-            "response_focus 应说明本系统不直接给具体药名/剂量/兑水/频次，并建议核对当地登记标签和农技人员。"
-            "如果用户只是问后续怎么做，聚焦处置方案和复查；如果用户纠正诊断，聚焦重新评估和方案调整。"
+            "只有 semantic_observation 显示用户本轮确实是在描述后续变化时，才选择 COMPARE_FOLLOWUP。"
+            "如果用户是在补充信息、提出猜测、纠正事实、询问能否用药或下一步怎么做，应继续综合判断并选择 DIAGNOSE_AND_PLAN 或 ASK_MORE_INFO。"
+            "地点来自 LocationTool，天气来自 WeatherTool，图片观察来自 VisionTool，语义观察来自 SemanticObservationTool；你需要综合它们。"
+            "不要给具体农药名称、剂量、兑水比例、施药频次或混配处方。涉及用药时只给安全边界和咨询当地登记标签/农技人员的建议。"
             "不要选择 CLOSE_CASE，除非用户明确要求停止跟踪该问题。"
-            "返回字段：next_action, reason, confidence, requested_state, questions, observations_used, tool_plan, user_intent, response_focus。"
+            "返回字段：next_action, reason, confidence, requested_state, questions, observations_used, tool_plan, user_intent, response_focus,"
+            "information_sufficient, problem_category, likely_causes, diagnosis_evidence, confidence_label, severity_label,"
+            "immediate_actions, observation_points, escalation_conditions, followup_after_days, chemical_safety_note, harvest_safety_note, plain_summary。"
             f"\n上下文 JSON：{json.dumps(compact_context, ensure_ascii=False)}"
         )
 
@@ -195,13 +198,8 @@ class AgentDecisionEngine:
         if decision.next_action not in context.available_actions:
             raise AgentDecisionError(f"Agent 选择了不可用动作：{decision.next_action.value}")
 
-        missing = self._effective_missing_fields(context)
-        high_confidence_vision = self._has_high_confidence_vision(context)
-        if decision.next_action == AgentAction.DIAGNOSE_AND_PLAN and len(missing) >= 3 and not high_confidence_vision:
-            raise AgentDecisionError("Agent 尝试在关键信息不足时直接诊断。")
-
         if decision.next_action == AgentAction.ASK_MORE_INFO and not decision.questions:
-            decision.questions = baseline.questions
+            raise AgentDecisionError("Agent 选择追问信息但没有给出 questions。")
 
         if self._is_followup_change_message(context):
             decision.next_action = AgentAction.COMPARE_FOLLOWUP
@@ -221,9 +219,9 @@ class AgentDecisionEngine:
         if not decision.observations_used:
             decision.observations_used = self._observation_summary(context)
         if not decision.tool_plan:
-            decision.tool_plan = self._tool_plan_for_intent(decision.user_intent) or baseline.tool_plan
+            decision.tool_plan = baseline.tool_plan
         if not decision.response_focus:
-            decision.response_focus = baseline.response_focus or self._infer_turn_focus(context)[1]
+            decision.response_focus = baseline.response_focus
         return self._ensure_available_action(decision, context)
 
     def _ensure_available_action(
@@ -332,9 +330,15 @@ class AgentDecisionEngine:
         if context.active_followup:
             summary.append("存在待复查任务")
         if context.weather_observation:
-            signals = context.weather_observation.get("risk_signals", [])
-            if signals:
-                summary.append("天气观察：" + "；".join(signals[:2]))
+            weather_parts = []
+            if context.weather_observation.get("weather"):
+                weather_parts.append(str(context.weather_observation.get("weather")))
+            if context.weather_observation.get("current_temperature_c") is not None:
+                weather_parts.append(f"{context.weather_observation.get('current_temperature_c')}℃")
+            if context.weather_observation.get("current_relative_humidity") is not None:
+                weather_parts.append(f"湿度{context.weather_observation.get('current_relative_humidity')}%")
+            if weather_parts:
+                summary.append("天气观察：" + "，".join(weather_parts[:3]))
         if context.date_observation:
             summary.append(f"当前日期：{context.date_observation.get('today')}")
         return summary
@@ -348,82 +352,8 @@ class AgentDecisionEngine:
             f"当前可选动作：{', '.join(action.value for action in context.available_actions)}",
         ]
 
-    def _infer_turn_focus(self, context: AgentDecisionContext) -> tuple[str, list[str]]:
-        semantic = context.semantic_observation or {}
-        semantic_intent = semantic.get("user_intent")
-        if semantic.get("is_configured") and semantic_intent and semantic_intent != "unknown":
-            focus_by_intent = {
-                "followup_report": ["判断变化趋势", "根据变化调整方案和复查"],
-                "correction": ["按用户纠正更新病例事实", "重新评估诊断和方案"],
-                "chemical_question": ["回答用药安全", "结合采收和安全边界"],
-                "chemical_safety_question": ["回答用药安全", "结合采收和安全边界"],
-                "pesticide_detail_question": ["说明不能直接给具体药名/剂量", "给出安全替代处理和咨询路径"],
-                "location_update": ["更新实际种植地点", "重新观察天气环境"],
-                "weather_update": ["更新天气环境", "重新评估风险"],
-                "handling_plan_question": ["聚焦下一步处理", "说明观察重点和复查安排"],
-            }
-            return str(semantic_intent), focus_by_intent.get(str(semantic_intent), ["围绕用户本轮问题回答"])
-
-        text = context.latest_user_message or ""
-        if any(word in text for word in ["用什么药", "什么药", "药名", "剂量", "兑水", "频次", "喷几次"]):
-            return (
-                "pesticide_detail_question",
-                [
-                    "回答用户对具体药剂/剂量的追问",
-                    "明确不提供具体药名、剂量、兑水比例或施药频次",
-                    "结合采收时间提醒核对登记标签和安全间隔期",
-                    "给出可执行的非化学处理和观察重点",
-                ],
-            )
-        if any(word in text for word in ["能不能用药", "能用药", "可以用药", "打药", "喷药", "收获"]):
-            return (
-                "chemical_safety_question",
-                [
-                    "回答现在是否适合用药",
-                    "结合距离采收时间说明安全边界",
-                    "优先给出非化学处理",
-                    "说明需要核对当地登记标签和安全间隔期",
-                ],
-            )
-        if any(word in text for word in ["怎么办", "怎么处理", "怎么解决", "建议怎么", "下一步"]):
-            return (
-                "handling_plan_question",
-                ["聚焦下一步处理", "说明观察重点", "说明何时复查或调整方案"],
-            )
-        if any(word in text for word in ["是不是", "应该是", "听说", "像不像"]):
-            return (
-                "diagnosis_correction_or_hypothesis",
-                ["回应用户提出的候选问题", "重新核对诊断", "如方案变化则说明调整点"],
-            )
-        if self._is_followup_change_message(context):
-            return (
-                "followup_change_report",
-                ["判断变化趋势", "如果虫量或病斑增加则升级处理", "调整复查和提醒"],
-            )
-        if context.active_followup and context.active_followup.get("is_due"):
-            return (
-                "due_followup_context",
-                ["提醒复查已到期或临近", "请用户描述变化", "根据变化调整方案"],
-            )
-        return (
-            "initial_diagnosis",
-            ["判断信息是否足够", "说明疑似类型和严重程度", "给出处置和复查计划"],
-        )
-
     def _is_followup_change_message(self, context: AgentDecisionContext) -> bool:
         if not context.active_followup:
             return False
         semantic = context.semantic_observation or {}
         return bool(semantic.get("is_configured") and semantic.get("is_followup_report"))
-
-    def _tool_plan_for_intent(self, intent: str) -> list[str]:
-        common = ["DateTool", "KnowledgeSearchTool", "DiagnosisTool", "SafetyChecker"]
-        if intent in {"chemical_safety_question", "pesticide_detail_question"}:
-            return [*common, "WeatherTool", "PlanTool", "CalendarReminderTool", "ResponseComposer"]
-        if intent == "handling_plan_question":
-            return [*common, "WeatherTool", "PlanTool", "CalendarReminderTool"]
-        if intent == "diagnosis_correction_or_hypothesis":
-            return [*common, "PlanTool", "CalendarReminderTool"]
-        if intent == "followup_change_report":
-            return ["DateTool", "FollowupCompareTool", "StateMachine", "CalendarReminderTool", "ResponseComposer"]
-        return [*common, "PlanTool", "CalendarReminderTool"]

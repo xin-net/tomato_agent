@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     deepseek_text_model: str = "deepseek-v4-pro"
     vision_provider: str = "openai"
     openai_vision_model: str = "gpt-5.5"
+    amap_web_service_key: str | None = None
     weather_api_key: str | None = None
     cors_origins: str = (
         "http://localhost:5174,http://127.0.0.1:5174,"
