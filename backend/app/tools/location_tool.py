@@ -2,7 +2,7 @@ import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from app.core.config import get_settings
 from app.tools.llm_adapter import OpenAIAdapter
@@ -13,6 +13,35 @@ class LocationLanguageObservation(BaseModel):
     confidence: str = "low"
     evidence: list[str] = []
     uncertainties: list[str] = []
+
+    @field_validator("explicit_location", mode="before")
+    @classmethod
+    def _coerce_optional_text(cls, value):
+        if value in (None, "", [], {}):
+            return None
+        return str(value)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _coerce_confidence(cls, value):
+        if isinstance(value, (int, float)):
+            if value >= 0.75:
+                return "high"
+            if value >= 0.4:
+                return "medium"
+            return "low"
+        if value in (None, "", [], {}):
+            return "low"
+        return str(value)
+
+    @field_validator("evidence", "uncertainties", mode="before")
+    @classmethod
+    def _coerce_list(cls, value):
+        if value in (None, "", [], {}):
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item not in (None, "", [], {})]
+        return [str(value)]
 
 
 class LocationObservation(BaseModel):

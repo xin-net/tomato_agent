@@ -384,6 +384,7 @@ def test_unconfirmed_initial_location_can_be_replaced_once_then_locked(db_sessio
     )
     final_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
     assert final_detail.structured_data["location_observation"]["location"] == "成都市成华区"
+    assert final_detail.structured_data["location_observation"]["location_source"] == "user_explicit"
     assert final_detail.structured_data["location_observation"]["confirmation_needed"] is False
     assert final_detail.structured_data["location_observation"]["confirmation_prompt_count"] == 2
     assert final_detail.structured_data["weather_observation"]["location"] == "成都市成华区"
@@ -501,6 +502,170 @@ def test_location_confirmation_reply_uses_location_tool_when_semantics_misses_up
     assert final_detail.structured_data["weather_observation"]["adcode"] == "120100"
     assert weather_adcodes == ["510107", "120100", "120100"]
     assert location_calls == ["叶背有很多白色小虫。", "实际种植地在天津市。"]
+
+
+def test_location_tool_accepts_llm_numeric_confidence_and_string_evidence(db_session, monkeypatch):
+    from app.tools.llm_adapter import LLMResult
+    from app.tools.semantic_observation_tool import SemanticObservation
+
+    weather_adcodes = []
+
+    def fake_semantic_observe(
+        self,
+        message,
+        case_memory=None,
+        active_followup=None,
+        date_observation=None,
+        history_summary=None,
+    ):
+        return SemanticObservation(
+            status="analyzed",
+            is_configured=True,
+            model="test-semantic",
+            user_intent="initial_diagnosis",
+            corrections={},
+            confidence="high",
+        )
+
+    def fake_llm_complete(self, prompt, model=None):
+        if "天津" in prompt:
+            content = '{"explicit_location":"天津市","confidence":0.99,"evidence":"用户明确说实际种植地在天津市。","uncertainties":[]}'
+        else:
+            content = '{"explicit_location":null,"confidence":0.2,"evidence":"用户没有提供实际种植地点。","uncertainties":[]}'
+        return LLMResult(provider="openai", model="test", content=content, is_configured=True)
+
+    def fake_ip_location(self):
+        return {
+            "location": "四川省 成都市",
+            "province": "四川省",
+            "city": "成都市",
+            "adcode": "510100",
+            "uncertainties": [],
+        }
+
+    def fake_geocode(self, address):
+        return {
+            "formatted_address": address,
+            "adcode": "120100",
+            "province": "天津市",
+            "city": "天津市",
+            "district": None,
+            "latitude": 39.08,
+            "longitude": 117.20,
+            "uncertainties": [],
+        }
+
+    def fake_weather(self, key, adcode):
+        weather_adcodes.append(adcode)
+        return {
+            "weather": "多云",
+            "temperature": "29",
+            "winddirection": "东",
+            "windpower": "≤3",
+            "humidity": "65",
+            "reporttime": "2026-07-08 11:00:00",
+        }
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_semantic_observe)
+    monkeypatch.setattr("app.tools.llm_adapter.OpenAIAdapter.complete", fake_llm_complete)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._ip_location", fake_ip_location)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._geocode", fake_geocode)
+    monkeypatch.setattr("app.tools.weather_tool.WeatherTool._fetch_amap_weather", fake_weather)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            symptoms="叶背有很多白色小虫。",
+            affected_parts=["叶背"],
+        )
+    )
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(message="实际种植地在天津市。"),
+    )
+
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    location = detail.structured_data["location_observation"]
+    assert location["location"] == "天津市"
+    assert location["language_confidence"] == "high"
+    assert location["evidence"] == ["用户明确说实际种植地在天津市。"]
+    assert detail.structured_data["weather_observation"]["adcode"] == "120100"
+    assert weather_adcodes == ["510100", "120100"]
+
+
+def test_automatic_location_memory_does_not_become_user_confirmed(db_session, monkeypatch):
+    from app.tools.llm_adapter import LLMResult
+    from app.tools.semantic_observation_tool import SemanticObservation
+
+    def fake_semantic_observe(
+        self,
+        message,
+        case_memory=None,
+        active_followup=None,
+        date_observation=None,
+        history_summary=None,
+    ):
+        return SemanticObservation(
+            status="analyzed",
+            is_configured=True,
+            model="test-semantic",
+            user_intent="initial_diagnosis",
+            corrections={},
+            confidence="high",
+        )
+
+    def fake_llm_complete(self, prompt, model=None):
+        explicit = "天津市" if "天津" in prompt else None
+        content = (
+            '{"explicit_location":"天津市","confidence":0.99,"evidence":"用户明确说实际种植地在天津市。","uncertainties":[]}'
+            if explicit
+            else '{"explicit_location":null,"confidence":0.2,"evidence":"没有提供地点。","uncertainties":[]}'
+        )
+        return LLMResult(provider="openai", model="test", content=content, is_configured=True)
+
+    def fake_ip_location(self):
+        return {
+            "location": "四川省 成都市",
+            "province": "四川省",
+            "city": "成都市",
+            "adcode": "510100",
+            "uncertainties": [],
+        }
+
+    def fake_geocode(self, address):
+        return {
+            "formatted_address": address,
+            "adcode": "120100",
+            "province": "天津市",
+            "city": "天津市",
+            "district": None,
+            "latitude": 39.08,
+            "longitude": 117.20,
+            "uncertainties": [],
+        }
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_semantic_observe)
+    monkeypatch.setattr("app.tools.llm_adapter.OpenAIAdapter.complete", fake_llm_complete)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._ip_location", fake_ip_location)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._geocode", fake_geocode)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(symptoms="叶背有很多白色小虫。")
+    )
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(message="先不管地点，虫子还在。"),
+    )
+    after_memory_reuse = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert after_memory_reuse.structured_data["location_observation"]["location_source"] == "amap_ip"
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(message="实际种植地在天津市。"),
+    )
+    final_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert final_detail.structured_data["location_observation"]["location"] == "天津市"
+    assert final_detail.structured_data["location_observation"]["location_source"] == "user_explicit"
 
 
 def test_followup_worsening_escalates_case(db_session):

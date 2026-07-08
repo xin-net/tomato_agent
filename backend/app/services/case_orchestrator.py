@@ -632,7 +632,7 @@ class CaseOrchestrator:
                     browser_location_source=location_source,
                     browser_location_error=location_error,
                     explicit_location=explicit_location,
-                    allow_fallback=not has_locked_location,
+                    allow_fallback=not has_locked_location and not should_probe_confirmation_reply,
                 ),
                 input_summary={
                     "turn_scope": "initial_resolution_or_user_location_update",
@@ -733,14 +733,14 @@ class CaseOrchestrator:
     def _has_locked_location(self, location: dict) -> bool:
         if not self._is_usable_location(location):
             return False
-        return True
+        return location.get("location_source") == "user_explicit"
 
     def _should_probe_location_confirmation_reply(self, location: dict) -> bool:
         if not self._is_usable_location(location):
             return False
         if location.get("location_source") == "user_explicit":
             return False
-        return int(location.get("confirmation_prompt_count") or 0) == 1
+        return int(location.get("confirmation_prompt_count") or 0) >= 1
 
     def _is_usable_location(self, location: dict) -> bool:
         text = str(location.get("location") or "").strip()
@@ -758,7 +758,7 @@ class CaseOrchestrator:
         location = previous_location or previous_weather
         return LocationObservation(
             location=location.get("location") or "用户未提供地点",
-            location_source="case_memory_user_location",
+            location_source=location.get("location_source") or "case_memory",
             adcode=location.get("adcode"),
             province=location.get("province"),
             city=location.get("city"),
