@@ -50,6 +50,7 @@ class LocationTool:
         browser_location_source: str | None = None,
         browser_location_error: str | None = None,
         explicit_location: str | None = None,
+        allow_fallback: bool = True,
     ) -> LocationObservation:
         language = self._observe_language_location(user_message) if user_message.strip() else None
         if not explicit_location and language and language.explicit_location:
@@ -71,6 +72,17 @@ class LocationTool:
                 language_confidence=language.confidence if language else None,
                 evidence=language.evidence if language else [],
                 uncertainties=geocoded.get("uncertainties", []) + (language.uncertainties if language else []),
+            )
+
+        if not allow_fallback:
+            return LocationObservation(
+                location=fallback_location,
+                location_source="no_explicit_location_update",
+                requires_confirmation=False,
+                note="本轮只检查用户是否明确更新种植地点；未识别到明确地点，因此不使用自动定位兜底。",
+                language_confidence=language.confidence if language else None,
+                evidence=language.evidence if language else [],
+                uncertainties=language.uncertainties if language else [],
             )
 
         if browser_latitude is not None and browser_longitude is not None:

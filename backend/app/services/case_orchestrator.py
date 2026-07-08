@@ -582,6 +582,7 @@ class CaseOrchestrator:
                     "current_plan_summary": (case.current_plan or {}).get("summary")
                     if case.current_plan
                     else None,
+                    "location_observation": (case.structured_data or {}).get("location_observation"),
                 },
                 active_followup=self._followup_context(active_followup) if active_followup else None,
                 date_observation=(case.structured_data or {}).get("date_observation"),
@@ -613,8 +614,9 @@ class CaseOrchestrator:
         previous_location = current_structured.get("location_observation") or {}
         previous_weather = current_structured.get("weather_observation") or {}
         has_locked_location = self._has_locked_location(previous_location)
+        should_probe_confirmation_reply = self._should_probe_location_confirmation_reply(previous_location)
 
-        resolved_location_this_turn = not has_locked_location or explicit_location
+        resolved_location_this_turn = not has_locked_location or explicit_location or should_probe_confirmation_reply
 
         if resolved_location_this_turn:
             location_observation = self._call_tool(
@@ -630,10 +632,12 @@ class CaseOrchestrator:
                     browser_location_source=location_source,
                     browser_location_error=location_error,
                     explicit_location=explicit_location,
+                    allow_fallback=not has_locked_location,
                 ),
                 input_summary={
                     "turn_scope": "initial_resolution_or_user_location_update",
                     "had_locked_location": has_locked_location,
+                    "probing_confirmation_reply": should_probe_confirmation_reply,
                     "explicit_location": explicit_location,
                     "browser_location_label": location_label,
                     "browser_location_source": location_source,
@@ -645,6 +649,12 @@ class CaseOrchestrator:
                 previous_location,
                 previous_weather,
             )
+        if location_observation.location_source == "no_explicit_location_update":
+            location_observation = self._location_observation_from_memory(
+                previous_location,
+                previous_weather,
+            )
+            resolved_location_this_turn = False
         location = location_observation.location
         resolved_source = location_observation.location_source
         latitude = location_observation.latitude
@@ -660,6 +670,8 @@ class CaseOrchestrator:
         location_dump["confirmation_prompt_count"] = previous_prompt_count + 1 if confirmation_needed else previous_prompt_count
         if explicit_location:
             location_dump["location_resolution_reason"] = "user_location_update"
+        elif should_probe_confirmation_reply and resolved_location_this_turn:
+            location_dump["location_resolution_reason"] = "confirmation_reply_location_update"
         elif resolved_location_this_turn:
             location_dump["location_resolution_reason"] = "initial_resolution"
         else:
@@ -721,9 +733,14 @@ class CaseOrchestrator:
     def _has_locked_location(self, location: dict) -> bool:
         if not self._is_usable_location(location):
             return False
-        if location.get("is_location_locked") is False:
-            return False
         return True
+
+    def _should_probe_location_confirmation_reply(self, location: dict) -> bool:
+        if not self._is_usable_location(location):
+            return False
+        if location.get("location_source") == "user_explicit":
+            return False
+        return int(location.get("confirmation_prompt_count") or 0) == 1
 
     def _is_usable_location(self, location: dict) -> bool:
         text = str(location.get("location") or "").strip()

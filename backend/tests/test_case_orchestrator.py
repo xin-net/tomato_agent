@@ -392,6 +392,117 @@ def test_unconfirmed_initial_location_can_be_replaced_once_then_locked(db_sessio
     assert len(location_calls) == 2
 
 
+def test_location_confirmation_reply_uses_location_tool_when_semantics_misses_update(db_session, monkeypatch):
+    from app.tools.semantic_observation_tool import SemanticObservation
+
+    location_calls = []
+    weather_adcodes = []
+
+    def fake_semantic_observe(
+        self,
+        message,
+        case_memory=None,
+        active_followup=None,
+        date_observation=None,
+        history_summary=None,
+    ):
+        return SemanticObservation(
+            status="analyzed",
+            is_configured=True,
+            model="test-semantic",
+            user_intent="initial_diagnosis",
+            corrections={},
+            confidence="high",
+        )
+
+    def fake_location_language(self, message):
+        from app.tools.location_tool import LocationLanguageObservation
+
+        location_calls.append(message)
+        return LocationLanguageObservation(
+            explicit_location="天津市" if "天津" in message else None,
+            confidence="high" if "天津" in message else "low",
+            evidence=["用户在地点确认回复中明确说实际地点是天津市。"] if "天津" in message else [],
+        )
+
+    def fake_reverse_geocode(self, latitude, longitude):
+        return {
+            "formatted_address": "成都市武侯区",
+            "adcode": "510107",
+            "province": "四川省",
+            "city": "成都市",
+            "district": "武侯区",
+            "uncertainties": [],
+        }
+
+    def fake_geocode(self, address):
+        return {
+            "formatted_address": address,
+            "adcode": "120100",
+            "province": "天津市",
+            "city": "天津市",
+            "district": None,
+            "latitude": 39.08,
+            "longitude": 117.20,
+            "uncertainties": [],
+        }
+
+    def fake_weather(self, key, adcode):
+        weather_adcodes.append(adcode)
+        return {
+            "weather": "多云",
+            "temperature": "29",
+            "winddirection": "东",
+            "windpower": "≤3",
+            "humidity": "65",
+            "reporttime": "2026-07-08 11:00:00",
+        }
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_semantic_observe)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._observe_language_location", fake_location_language)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._reverse_geocode", fake_reverse_geocode)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._geocode", fake_geocode)
+    monkeypatch.setattr("app.tools.weather_tool.WeatherTool._fetch_amap_weather", fake_weather)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            symptoms="叶背有很多白色小虫。",
+            affected_parts=["叶背"],
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        )
+    )
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(message="实际种植地在天津市。"),
+    )
+    after_update = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert after_update.structured_data["location_observation"]["location"] == "天津市"
+    assert after_update.structured_data["location_observation"]["adcode"] == "120100"
+    assert after_update.structured_data["location_observation"]["confirmation_needed"] is True
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(
+            message="确定了，就是天津市。",
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        ),
+    )
+    final_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert final_detail.structured_data["location_observation"]["location"] == "天津市"
+    assert final_detail.structured_data["location_observation"]["confirmation_needed"] is False
+    assert final_detail.structured_data["weather_observation"]["location"] == "天津市"
+    assert final_detail.structured_data["weather_observation"]["adcode"] == "120100"
+    assert weather_adcodes == ["510107", "120100", "120100"]
+    assert location_calls == ["叶背有很多白色小虫。", "实际种植地在天津市。"]
+
+
 def test_followup_worsening_escalates_case(db_session):
     created = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(

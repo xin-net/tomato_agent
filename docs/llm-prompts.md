@@ -62,7 +62,7 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
 
 位置：`backend/app/tools/semantic_observation_tool.py`
 
-定位：理解用户本轮自然语言。它不做最终诊断，不依赖 VisionTool、WeatherTool、LocationTool 输出，也不负责地点、真实天气、图片阶段或采收判断。
+定位：理解用户本轮自然语言。它不做最终诊断，不依赖 VisionTool、WeatherTool、LocationTool 输出，也不负责地理编码、真实天气、图片阶段或采收视觉判断；如果用户在语义上提供或纠正种植地点，需要写入 `corrections.location_text`，由 LocationTool 标准化。
 
 当前提示词摘要：
 
@@ -72,8 +72,8 @@ active_followup 只表示系统已有复查计划，不表示用户当前消息�
 只根据 latest_user_message、本病例已有文字记忆、复查计划和历史摘要判断本轮语义。
 不要依赖图片工具、天气工具或地点工具的输出。
 必须依靠语义理解，不要做关键词匹配或固定话术匹配。
-地点由 LocationTool 判断，天气由 WeatherTool 判断，图片中的阶段/采收由 VisionTool 判断。
-如果用户纠正这些事实，只把它们放进 corrections。
+地点标准化由 LocationTool 判断，天气由 WeatherTool 查询，图片中的阶段/采收由 VisionTool 判断。
+如果用户提供或纠正这些事实，只把它们放进 corrections。
 需要判断 user_intent、是否复查、复查趋势、发生部位、症状、问题类别、用户提到的候选问题、严重程度和用户纠正。
 ```
 
