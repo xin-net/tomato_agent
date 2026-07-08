@@ -800,6 +800,25 @@ body {
   line-height: 1.35;
 }
 
+.agent-trace .ant-collapse {
+  width: 100%;
+}
+
+.json-block {
+  max-height: 280px;
+  margin: 0;
+  padding: 10px 11px;
+  overflow: auto;
+  border: 1px solid #dfe5dc;
+  border-radius: 8px;
+  background: #fbfdfb;
+  color: #27332a;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .tight-divider {
   margin: 6px 0 10px;
 }

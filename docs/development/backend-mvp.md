@@ -100,13 +100,15 @@ uvicorn app.main:app --reload
 
 - `VisionTool`：接收图片 URL/data URL，配置 OpenAI Key 后调用 OpenAI Responses API 并要求结构化 JSON；输出会写入 `vision_observation`，再由 `CaseOrchestrator` 融合成 `multimodal_observation`，供 AgentDecisionEngine 综合判断。未配置时返回结构化不可用观察。
 - `SemanticObservationTool`：使用大模型理解用户本轮自然语言，只读取本轮用户文字、病例文字记忆、复查计划和历史摘要，结构化判断本轮意图、是否为复查变化、复查趋势、用户纠正和症状语义。它不读取 VisionTool/WeatherTool/LocationTool 输出，也不负责地点、天气、阶段或采收，避免工具职责交叉。
-- `LocationTool`：使用独立 LLM 判断用户本轮是否明确提供实际种植地点；用户显式地点优先，并通过高德地理编码获取 adcode。没有显式地点时，可使用客户端坐标反向地理编码或高德 IP 定位兜底，并要求用户确认。
-- `WeatherTool`：根据 LocationTool 输出的 adcode 调用高德天气 API，只负责真实天气查询，不从用户文字中抽取“阴雨/高湿”等语义。用户文字里的天气事实由 SemanticObservationTool 作为上下文交给 AgentDecisionEngine 综合。
+- `LocationTool`：使用独立 LLM 判断用户本轮是否明确提供实际种植地点；用户显式地点优先，并通过高德地理编码获取 adcode。没有显式地点时，可使用客户端坐标反向地理编码或高德 IP 定位兜底，并要求用户确认。它只在 Case 首轮或用户明确更新地点时运行；后续轮次默认沿用 Case Memory 中的种植地点，避免浏览器当前位置覆盖真实种植地。
+- `WeatherTool`：每轮根据 Case Memory 中的种植地点/adcode 调用高德天气 API，只负责真实天气查询，不从用户文字中抽取“阴雨/高湿”等语义。用户文字里的天气事实由 SemanticObservationTool 作为上下文交给 AgentDecisionEngine 综合。
 - `OpenAIAdapter`：文本模型适配器已具备真实调用边界，用于 Agent 决策、回复表达和视觉工具的模型调用。
 - `ReminderRepository` / `CalendarReminderTool`：内部提醒工具，复查计划创建时生成提醒，用户提交复查后取消提醒；同时提供 Google Calendar 添加链接和 ICS 下载。网页端不能无授权静默写入 Windows/macOS/手机系统日历，自动同步需要后续接 Google/Microsoft/Apple 日历授权或本地桌面桥接。
 - `KnowledgeSearchTool`：暂时保留但不参与常规诊断路径，后续用于 IPM、地方农技资料、登记标签提示等需要治理和可追溯的知识。
 
 工具输出必须写入 Case/Event Memory，再由编排器继续推进，不能绕过状态机和安全检查直接生成最终处置。图片识别也是如此：多模态模型只提供观察线索，不直接决定病例状态、最终诊断或处置方案。
+
+Agent 决策事件会携带运行轨迹：Observe、Decide、Act、Guard、Memory 五个阶段分别记录输入和输出，前端右侧“Agent 运行轨迹”可展开查看，用于定位工具结果、模型决策和状态写入之间的问题。
 
 ## 前端工作台
 

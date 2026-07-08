@@ -190,6 +190,86 @@ def test_user_explicit_location_and_weather_override_browser_location(db_session
     assert detail.recent_weather
 
 
+def test_location_is_resolved_once_and_reused_for_later_weather(db_session, monkeypatch):
+    location_calls = []
+
+    def fake_location_language(self, message):
+        from app.tools.location_tool import LocationLanguageObservation
+
+        location_calls.append(message)
+        return LocationLanguageObservation(
+            explicit_location="成都市成华区" if "成华区" in message else None,
+            confidence="high" if "成华区" in message else "low",
+            evidence=["用户明确说地点在成都成华区。"] if "成华区" in message else [],
+        )
+
+    def fake_geocode(self, address):
+        return {
+            "formatted_address": address,
+            "adcode": "510108",
+            "province": "四川省",
+            "city": "成都市",
+            "district": "成华区",
+            "latitude": 30.67,
+            "longitude": 104.10,
+            "uncertainties": [],
+        }
+
+    def fake_weather(self, key, adcode):
+        return {
+            "weather": "阴",
+            "temperature": "27",
+            "winddirection": "东北",
+            "windpower": "≤3",
+            "humidity": "80",
+            "reporttime": "2026-07-08 10:00:00",
+        }
+
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._observe_language_location", fake_location_language)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._geocode", fake_geocode)
+    monkeypatch.setattr("app.tools.weather_tool.WeatherTool._fetch_amap_weather", fake_weather)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="地点在成都成华区，叶背有小白虫，一碰有白色飞虫，结果期，距离采收大概 10 天。",
+            affected_parts=["叶背"],
+            days_to_harvest=10,
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        )
+    )
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(
+            message="现在虫量差不多，继续观察一下",
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        ),
+    )
+
+    detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert detail.structured_data["location_observation"]["location"] == "成都市成华区"
+    assert detail.structured_data["location_observation"]["adcode"] == "510108"
+    assert detail.structured_data["weather_observation"]["location"] == "成都市成华区"
+    assert detail.structured_data["weather_observation"]["adcode"] == "510108"
+    assert location_calls == [
+        "地点在成都成华区，叶背有小白虫，一碰有白色飞虫，结果期，距离采收大概 10 天。"
+    ]
+
+    tool_events = [
+        event
+        for event in detail.events
+        if event.event_type == EventType.TOOL_CALLED and event.system_output["tool"] == "LocationTool"
+    ]
+    assert len(tool_events) == 1
+
+
 def test_followup_worsening_escalates_case(db_session):
     created = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(

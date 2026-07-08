@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   Card,
+  Collapse,
   ConfigProvider,
   Divider,
   Empty,
@@ -1288,6 +1289,12 @@ function ImageEvidence({ detail, onPreview }: { detail: CaseDetail; onPreview: (
 }
 
 function environmentSummary(detail: CaseDetail) {
+  const locationObservation = detail.structured_data.location_observation as
+    | {
+        location?: string;
+        location_source?: string;
+      }
+    | undefined;
   const weather = detail.structured_data.weather_observation as
     | {
         location?: string;
@@ -1305,12 +1312,8 @@ function environmentSummary(detail: CaseDetail) {
         requires_confirmation?: boolean;
       }
     | undefined;
-  if (!weather) {
-    return {
-      location: '-',
-      weather: detail.recent_weather || '-',
-    };
-  }
+  const observedLocation = locationTextOrFallback(locationObservation?.location, '');
+  if (!weather) return { location: observedLocation || '暂未识别出', weather: detail.recent_weather || '-' };
 
   const metrics = [
     weather.current_temperature_c != null ? `${weather.current_temperature_c}℃` : null,
@@ -1327,18 +1330,14 @@ function environmentSummary(detail: CaseDetail) {
     detail.recent_weather ||
     String(weather.status || '-');
   return {
-    location:
-      weather.location && weather.location !== '用户未提供地点'
-        ? weather.location
-        : weather.latitude != null && weather.longitude != null
-          ? '当前位置附近'
-          : '暂未识别出',
+    location: observedLocation || locationTextOrFallback(weather.location, '暂未识别出'),
     weather: weatherText,
   };
 }
 
 function stageSummary(detail: CaseDetail) {
-  return readableTextOrFallback(detail.growth_stage);
+  const vision = detail.structured_data.vision_observation as { growth_stage_hint?: string | null } | undefined;
+  return readableTextOrFallback(detail.growth_stage, readableTextOrFallback(vision?.growth_stage_hint));
 }
 
 function harvestSummary(detail: CaseDetail) {
@@ -1349,7 +1348,7 @@ function harvestSummary(detail: CaseDetail) {
   return `${detail.days_to_harvest} 天`;
 }
 
-function readableTextOrFallback(value?: string | null, fallback = '暂未识别出') {
+function readableTextOrFallback(value?: unknown, fallback = '暂未识别出') {
   if (!value) return fallback;
   const text = String(value).trim();
   if (!text) return fallback;
@@ -1358,6 +1357,12 @@ function readableTextOrFallback(value?: string | null, fallback = '暂未识别�
   if (suspiciousMatches && suspiciousMatches.length >= Math.max(2, Math.ceil(text.length * 0.25))) {
     return fallback;
   }
+  return text;
+}
+
+function locationTextOrFallback(value?: unknown, fallback = '暂未识别出') {
+  const text = readableTextOrFallback(value, '');
+  if (!text || text === '用户未提供地点' || text === '当前位置附近') return fallback;
   return text;
 }
 
@@ -1518,8 +1523,43 @@ function AgentTracePanel({ detail }: { detail: CaseDetail }) {
       <TraceList label="Act 工具计划" values={act.planned_tools} />
       <TraceList label="Guard 约束" values={guard.guardrails} />
       <TraceList label="Memory 写入" values={memory.will_write_events} />
+      <Collapse
+        size="small"
+        ghost
+        items={[
+          tracePanelItem('Observe 输入', observe.input),
+          tracePanelItem('Observe 输出', observe.output),
+          tracePanelItem('Decide 输入', decide.input),
+          tracePanelItem('Decide 输出', decide.output),
+          tracePanelItem('Act 输入', act.input),
+          tracePanelItem('Act 输出', act.output),
+          tracePanelItem('Guard 输入', guard.input),
+          tracePanelItem('Guard 输出', guard.output),
+          tracePanelItem('Memory 输入', memory.input),
+          tracePanelItem('Memory 输出', memory.output),
+        ].filter(isTracePanelItem)}
+      />
     </Space>
   );
+}
+
+function tracePanelItem(label: string, payload?: Record<string, unknown>) {
+  if (!payload || !Object.keys(payload).length) return null;
+  return {
+    key: label,
+    label,
+    children: <JsonBlock value={payload} />,
+  };
+}
+
+function isTracePanelItem(
+  item: ReturnType<typeof tracePanelItem>,
+): item is Exclude<ReturnType<typeof tracePanelItem>, null> {
+  return item !== null;
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>;
 }
 
 function TraceList({ label, values }: { label: string; values?: string[] }) {

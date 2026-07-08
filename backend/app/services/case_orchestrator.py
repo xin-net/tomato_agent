@@ -226,6 +226,8 @@ class CaseOrchestrator:
                 )
         if existing_structured.get("weather_observation"):
             case.structured_data["weather_observation"] = existing_structured["weather_observation"]
+        if existing_structured.get("location_observation"):
+            case.structured_data["location_observation"] = existing_structured["location_observation"]
         if existing_structured.get("date_observation"):
             case.structured_data["date_observation"] = existing_structured["date_observation"]
         if existing_structured.get("semantic_observation"):
@@ -608,39 +610,52 @@ class CaseOrchestrator:
         semantic = (case.structured_data or {}).get("semantic_observation") or {}
         raw = self._semantic_raw(semantic)
         explicit_location = raw.get("location_text")
-        previous_weather = (case.structured_data or {}).get("weather_observation") or {}
+        current_structured = dict(case.structured_data or {})
+        previous_location = current_structured.get("location_observation") or {}
+        previous_weather = current_structured.get("weather_observation") or {}
+        is_first_location_turn = not previous_location and not previous_weather
 
-        location_observation = self._call_tool(
-            case.id,
-            "LocationTool",
-            lambda: self.tool_registry.call(
+        if is_first_location_turn or explicit_location:
+            location_observation = self._call_tool(
+                case.id,
                 "LocationTool",
-                fallback_location=self._extract_location(case, message),
-                user_message=message,
-                browser_latitude=latitude,
-                browser_longitude=longitude,
-                browser_location_label=location_label,
-                browser_location_source=location_source,
-                browser_location_error=location_error,
-                explicit_location=explicit_location,
-                previous_location=previous_weather.get("location"),
-                previous_location_source=previous_weather.get("location_source"),
-                previous_adcode=previous_weather.get("adcode"),
-            ),
-            input_summary={
-                "explicit_location": explicit_location,
-                "browser_location_label": location_label,
-                "browser_location_source": location_source,
-                "has_coordinates": latitude is not None and longitude is not None,
-            },
-        )
+                lambda: self.tool_registry.call(
+                    "LocationTool",
+                    fallback_location=self._extract_location(case, message),
+                    user_message=message,
+                    browser_latitude=latitude,
+                    browser_longitude=longitude,
+                    browser_location_label=location_label,
+                    browser_location_source=location_source,
+                    browser_location_error=location_error,
+                    explicit_location=explicit_location,
+                    previous_location=previous_location.get("location") or previous_weather.get("location"),
+                    previous_location_source=previous_location.get("location_source")
+                    or previous_weather.get("location_source"),
+                    previous_adcode=previous_location.get("adcode") or previous_weather.get("adcode"),
+                ),
+                input_summary={
+                    "turn_scope": "first_or_user_location_update",
+                    "explicit_location": explicit_location,
+                    "browser_location_label": location_label,
+                    "browser_location_source": location_source,
+                    "has_coordinates": latitude is not None and longitude is not None,
+                },
+            )
+        else:
+            location_observation = self._location_observation_from_memory(
+                previous_location,
+                previous_weather,
+            )
         location = location_observation.location
         resolved_source = location_observation.location_source
         latitude = location_observation.latitude
         longitude = location_observation.longitude
         location_error = location_observation.location_error
         current = dict(case.structured_data or {})
-        current["location_observation"] = location_observation.model_dump()
+        location_dump = location_observation.model_dump()
+        location_dump["should_confirm_with_user"] = bool(is_first_location_turn or explicit_location)
+        current["location_observation"] = location_dump
         case.structured_data = current
 
         observation = self._call_tool(
@@ -668,7 +683,9 @@ class CaseOrchestrator:
             return
 
         current = dict(case.structured_data or {})
-        current["weather_observation"] = observation.model_dump()
+        weather_dump = observation.model_dump()
+        weather_dump["should_confirm_location_with_user"] = bool(is_first_location_turn or explicit_location)
+        current["weather_observation"] = weather_dump
         case.structured_data = current
         if observation.status == "live_weather":
             weather_text = " ".join(
@@ -682,6 +699,32 @@ class CaseOrchestrator:
             case.id,
             EventType.WEATHER_OBSERVED,
             system_output=observation.model_dump(),
+        )
+
+    def _location_observation_from_memory(
+        self,
+        previous_location: dict,
+        previous_weather: dict,
+    ):
+        from app.tools.location_tool import LocationObservation
+
+        location = previous_location or previous_weather
+        return LocationObservation(
+            location=location.get("location") or "用户未提供地点",
+            location_source="case_memory_user_location",
+            adcode=location.get("adcode"),
+            province=location.get("province"),
+            city=location.get("city"),
+            district=location.get("district"),
+            latitude=location.get("latitude"),
+            longitude=location.get("longitude"),
+            location_error=location.get("location_error"),
+            requires_confirmation=location.get("requires_confirmation", True),
+            note="沿用本病例首轮确认的种植地点；本轮只刷新天气。",
+            provider=location.get("provider", "amap"),
+            language_confidence=location.get("language_confidence"),
+            evidence=location.get("evidence", []),
+            uncertainties=location.get("uncertainties", []),
         )
 
     def _extract_location(self, case, message: str) -> str:
@@ -984,6 +1027,9 @@ class CaseOrchestrator:
         if source == "case_memory_user_location":
             return f"我继续按这个病例之前确认的地点「{location}」来判断：{weather_text}。如果植株不在那里，请告诉我实际地点。"
         if status == "live_weather":
+            should_confirm = weather.get("should_confirm_location_with_user", True)
+            if not should_confirm and source in {"case_memory_user_location", "user_explicit"}:
+                return None
             if source in {"browser", "browser_failed", "browser_unavailable"}:
                 return f"我这轮按客户端定位附近「{location}」的实时天气来判断：{weather_text}。如果番茄不在你当前位置，请告诉我实际地点和最近天气。"
             if source == "amap_ip":
@@ -1080,6 +1126,19 @@ class CaseOrchestrator:
     def _build_decision_trace(self, context: AgentDecisionContext, decision) -> dict:
         return {
             "observe": {
+                "input": {
+                    "latest_user_message": context.latest_user_message,
+                    "case_status": context.case_status.value,
+                    "active_followup": context.active_followup,
+                    "history_summary": context.history_summary,
+                },
+                "output": {
+                    "structured_symptoms": context.structured_symptoms.model_dump(mode="json"),
+                    "vision_observation": context.vision_observation,
+                    "semantic_observation": context.semantic_observation,
+                    "weather_observation": context.weather_observation,
+                    "date_observation": context.date_observation,
+                },
                 "case_status": context.case_status.value,
                 "latest_user_message": context.latest_user_message,
                 "missing_fields": context.structured_symptoms.missing_fields,
@@ -1096,6 +1155,16 @@ class CaseOrchestrator:
                 "active_followup": bool(context.active_followup),
             },
             "decide": {
+                "input": {
+                    "available_actions": [action.value for action in context.available_actions],
+                    "structured_symptoms": context.structured_symptoms.model_dump(mode="json"),
+                    "vision_observation": context.vision_observation,
+                    "semantic_observation": context.semantic_observation,
+                    "weather_observation": context.weather_observation,
+                    "date_observation": context.date_observation,
+                    "active_followup": context.active_followup,
+                },
+                "output": decision.model_dump(mode="json"),
                 "source": decision.decision_source,
                 "next_action": decision.next_action.value,
                 "requested_state": decision.requested_state.value if decision.requested_state else None,
@@ -1107,13 +1176,40 @@ class CaseOrchestrator:
                 "response_focus": decision.response_focus,
             },
             "act": {
+                "input": {
+                    "next_action": decision.next_action.value,
+                    "tool_plan": decision.tool_plan,
+                    "questions": decision.questions,
+                },
+                "output": {
+                    "planned_tools": decision.tool_plan,
+                    "response_focus": decision.response_focus,
+                },
                 "planned_tools": decision.tool_plan,
                 "questions": decision.questions,
             },
             "guard": {
+                "input": {
+                    "requested_state": decision.requested_state.value if decision.requested_state else None,
+                    "confidence": decision.confidence,
+                    "problem_category": decision.problem_category,
+                    "severity_label": decision.severity_label,
+                },
+                "output": {
+                    "guardrails": decision.guardrails,
+                    "state_machine_required": True,
+                    "safety_check_required": decision.next_action == AgentAction.DIAGNOSE_AND_PLAN,
+                },
                 "guardrails": decision.guardrails,
             },
             "memory": {
+                "input": {
+                    "case_id_context": context.case_status.value,
+                    "next_action": decision.next_action.value,
+                },
+                "output": {
+                    "will_write_events": self._events_for_action(decision.next_action),
+                },
                 "will_write_events": self._events_for_action(decision.next_action),
             },
         }

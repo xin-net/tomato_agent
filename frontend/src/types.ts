@@ -127,8 +127,13 @@ export interface CaseEvent {
 }
 
 export interface AgentTrace {
-  observe?: Record<string, unknown>;
+  observe?: Record<string, unknown> & {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
+  };
   decide?: {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
     source?: string;
     next_action?: string;
     requested_state?: string | null;
@@ -140,13 +145,19 @@ export interface AgentTrace {
     response_focus?: string[];
   };
   act?: {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
     planned_tools?: string[];
     questions?: string[];
   };
   guard?: {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
     guardrails?: string[];
   };
   memory?: {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
     will_write_events?: string[];
   };
 }
