@@ -270,6 +270,128 @@ def test_location_is_resolved_once_and_reused_for_later_weather(db_session, monk
     assert len(tool_events) == 1
 
 
+def test_unconfirmed_initial_location_can_be_replaced_once_then_locked(db_session, monkeypatch):
+    from app.tools.semantic_observation_tool import SemanticObservation
+
+    location_calls = []
+    weather_adcodes = []
+
+    def fake_semantic_observe(
+        self,
+        message,
+        case_memory=None,
+        active_followup=None,
+        date_observation=None,
+        history_summary=None,
+    ):
+        corrections = {}
+        if "成华区" in message:
+            corrections["location_text"] = "成都市成华区"
+        return SemanticObservation(
+            status="analyzed",
+            is_configured=True,
+            model="test-semantic",
+            user_intent="location_update" if corrections else "initial_diagnosis",
+            corrections=corrections,
+            confidence="high",
+        )
+
+    def fake_location_language(self, message):
+        from app.tools.location_tool import LocationLanguageObservation
+
+        location_calls.append(message)
+        return LocationLanguageObservation(
+            explicit_location="成都市成华区" if "成华区" in message else None,
+            confidence="high" if "成华区" in message else "low",
+            evidence=["用户明确纠正种植地点为成华区。"] if "成华区" in message else [],
+        )
+
+    def fake_reverse_geocode(self, latitude, longitude):
+        return {
+            "formatted_address": "成都市武侯区",
+            "adcode": "510107",
+            "province": "四川省",
+            "city": "成都市",
+            "district": "武侯区",
+            "uncertainties": [],
+        }
+
+    def fake_geocode(self, address):
+        return {
+            "formatted_address": address,
+            "adcode": "510108",
+            "province": "四川省",
+            "city": "成都市",
+            "district": "成华区",
+            "latitude": 30.67,
+            "longitude": 104.10,
+            "uncertainties": [],
+        }
+
+    def fake_weather(self, key, adcode):
+        weather_adcodes.append(adcode)
+        return {
+            "weather": "阴",
+            "temperature": "27",
+            "winddirection": "东北",
+            "windpower": "≤3",
+            "humidity": "80",
+            "reporttime": "2026-07-08 10:00:00",
+        }
+
+    monkeypatch.setattr("app.tools.semantic_observation_tool.SemanticObservationTool.observe", fake_semantic_observe)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._observe_language_location", fake_location_language)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._reverse_geocode", fake_reverse_geocode)
+    monkeypatch.setattr("app.tools.location_tool.LocationTool._geocode", fake_geocode)
+    monkeypatch.setattr("app.tools.weather_tool.WeatherTool._fetch_amap_weather", fake_weather)
+
+    created = CaseOrchestrator(db_session).create_case(
+        CreateCaseInput(
+            growth_stage="结果期",
+            symptoms="叶背有很多白色小虫。",
+            affected_parts=["叶背"],
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        )
+    )
+
+    first_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert first_detail.structured_data["location_observation"]["location"] == "成都市武侯区"
+    assert first_detail.structured_data["location_observation"]["confirmation_needed"] is True
+    assert first_detail.structured_data["location_observation"]["confirmation_prompt_count"] == 1
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(message="实际种植地点是成都市成华区。"),
+    )
+    second_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert second_detail.structured_data["location_observation"]["location"] == "成都市成华区"
+    assert second_detail.structured_data["location_observation"]["adcode"] == "510108"
+    assert second_detail.structured_data["location_observation"]["confirmation_needed"] is True
+    assert second_detail.structured_data["location_observation"]["confirmation_prompt_count"] == 2
+
+    CaseOrchestrator(db_session).reply_to_case(
+        created.case_id,
+        ReplyInput(
+            message="现在虫量没有继续增加。",
+            latitude=30.64,
+            longitude=104.04,
+            location_label="武侯区附近",
+            location_source="browser",
+        ),
+    )
+    final_detail = CaseOrchestrator(db_session).cases.get_detail(created.case_id)
+    assert final_detail.structured_data["location_observation"]["location"] == "成都市成华区"
+    assert final_detail.structured_data["location_observation"]["confirmation_needed"] is False
+    assert final_detail.structured_data["location_observation"]["confirmation_prompt_count"] == 2
+    assert final_detail.structured_data["weather_observation"]["location"] == "成都市成华区"
+    assert final_detail.structured_data["weather_observation"]["adcode"] == "510108"
+    assert weather_adcodes == ["510107", "510108", "510108"]
+    assert len(location_calls) == 2
+
+
 def test_followup_worsening_escalates_case(db_session):
     created = CaseOrchestrator(db_session).create_case(
         CreateCaseInput(

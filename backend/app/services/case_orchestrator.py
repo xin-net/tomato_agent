@@ -608,14 +608,15 @@ class CaseOrchestrator:
         location_error: str | None = None,
     ) -> None:
         semantic = (case.structured_data or {}).get("semantic_observation") or {}
-        raw = self._semantic_raw(semantic)
-        explicit_location = raw.get("location_text")
+        explicit_location = self._explicit_location_from_semantics(semantic)
         current_structured = dict(case.structured_data or {})
         previous_location = current_structured.get("location_observation") or {}
         previous_weather = current_structured.get("weather_observation") or {}
-        is_first_location_turn = not previous_location and not previous_weather
+        has_locked_location = self._has_locked_location(previous_location)
 
-        if is_first_location_turn or explicit_location:
+        resolved_location_this_turn = not has_locked_location or explicit_location
+
+        if resolved_location_this_turn:
             location_observation = self._call_tool(
                 case.id,
                 "LocationTool",
@@ -629,13 +630,10 @@ class CaseOrchestrator:
                     browser_location_source=location_source,
                     browser_location_error=location_error,
                     explicit_location=explicit_location,
-                    previous_location=previous_location.get("location") or previous_weather.get("location"),
-                    previous_location_source=previous_location.get("location_source")
-                    or previous_weather.get("location_source"),
-                    previous_adcode=previous_location.get("adcode") or previous_weather.get("adcode"),
                 ),
                 input_summary={
-                    "turn_scope": "first_or_user_location_update",
+                    "turn_scope": "initial_resolution_or_user_location_update",
+                    "had_locked_location": has_locked_location,
                     "explicit_location": explicit_location,
                     "browser_location_label": location_label,
                     "browser_location_source": location_source,
@@ -654,7 +652,19 @@ class CaseOrchestrator:
         location_error = location_observation.location_error
         current = dict(case.structured_data or {})
         location_dump = location_observation.model_dump()
-        location_dump["should_confirm_with_user"] = bool(is_first_location_turn or explicit_location)
+        location_locked = self._is_usable_location(location_dump)
+        confirmation_needed = bool(resolved_location_this_turn and location_locked)
+        previous_prompt_count = int(previous_location.get("confirmation_prompt_count") or 0)
+        location_dump["is_location_locked"] = location_locked
+        location_dump["confirmation_needed"] = confirmation_needed
+        location_dump["confirmation_prompt_count"] = previous_prompt_count + 1 if confirmation_needed else previous_prompt_count
+        if explicit_location:
+            location_dump["location_resolution_reason"] = "user_location_update"
+        elif resolved_location_this_turn:
+            location_dump["location_resolution_reason"] = "initial_resolution"
+        else:
+            location_dump["location_resolution_reason"] = "case_memory_reuse"
+        location_dump["should_confirm_with_user"] = confirmation_needed
         current["location_observation"] = location_dump
         case.structured_data = current
 
@@ -684,7 +694,7 @@ class CaseOrchestrator:
 
         current = dict(case.structured_data or {})
         weather_dump = observation.model_dump()
-        weather_dump["should_confirm_location_with_user"] = bool(is_first_location_turn or explicit_location)
+        weather_dump["should_confirm_location_with_user"] = confirmation_needed
         current["weather_observation"] = weather_dump
         case.structured_data = current
         if observation.status == "live_weather":
@@ -700,6 +710,26 @@ class CaseOrchestrator:
             EventType.WEATHER_OBSERVED,
             system_output=observation.model_dump(),
         )
+
+    def _explicit_location_from_semantics(self, semantic: dict) -> str | None:
+        corrections = semantic.get("corrections") or {}
+        location = corrections.get("location_text")
+        if location in (None, "", [], {}):
+            return None
+        return str(location)
+
+    def _has_locked_location(self, location: dict) -> bool:
+        if not self._is_usable_location(location):
+            return False
+        if location.get("is_location_locked") is False:
+            return False
+        return True
+
+    def _is_usable_location(self, location: dict) -> bool:
+        text = str(location.get("location") or "").strip()
+        if not text or text in {"用户未提供地点", "当前位置附近"}:
+            return False
+        return bool(location.get("adcode") or location.get("latitude") is not None or location.get("longitude") is not None)
 
     def _location_observation_from_memory(
         self,
@@ -1004,12 +1034,16 @@ class CaseOrchestrator:
         return raw
 
     def _environment_confirmation(self, case) -> str | None:
+        location_observation = (case.structured_data or {}).get("location_observation") or {}
+        if not location_observation.get("confirmation_needed"):
+            return None
+
         weather = (case.structured_data or {}).get("weather_observation") or {}
         if not weather:
             return None
 
-        location = weather.get("location") or "未确认地点"
-        source = weather.get("location_source") or "unknown"
+        location = location_observation.get("location") or weather.get("location") or "未确认地点"
+        source = location_observation.get("location_source") or weather.get("location_source") or "unknown"
         status = weather.get("status") or "manual_only"
         temperature = weather.get("current_temperature_c")
         humidity = weather.get("current_relative_humidity")
@@ -1023,19 +1057,14 @@ class CaseOrchestrator:
         weather_text = "，".join(weather_bits) if weather_bits else "暂未拿到实时天气，只参考了你的文字描述"
 
         if source == "user_explicit":
-            return f"我按你明确提供的地点「{location}」和天气信息来判断：{weather_text}。"
-        if source == "case_memory_user_location":
-            return f"我继续按这个病例之前确认的地点「{location}」来判断：{weather_text}。如果植株不在那里，请告诉我实际地点。"
+            return f"我先按你说的种植地点「{location}」和对应天气来判断：{weather_text}。如果地点不对，直接告诉我真实种植地就行。"
         if status == "live_weather":
-            should_confirm = weather.get("should_confirm_location_with_user", True)
-            if not should_confirm and source in {"case_memory_user_location", "user_explicit"}:
-                return None
             if source in {"browser", "browser_failed", "browser_unavailable"}:
-                return f"我这轮按客户端定位附近「{location}」的实时天气来判断：{weather_text}。如果番茄不在你当前位置，请告诉我实际地点和最近天气。"
+                return f"我先按定位得到的「{location}」附近天气来判断：{weather_text}。如果番茄实际种植地不在这里，直接告诉我真实地点。"
             if source == "amap_ip":
-                return f"我这轮按 IP 定位推断的「{location}」实时天气来判断：{weather_text}。IP 定位通常只到城市级，如果植株不在这里，请直接告诉我实际地点。"
-            return f"我这轮按「{location}」的实时天气来判断：{weather_text}。如果地点不对，请告诉我实际种植地点。"
-        return f"地点/天气还没有确认，我暂按「{location}」和你文字里的天气线索判断。若植株不在当前位置，请直接补充实际地点和最近天气。"
+                return f"我先按 IP 推断的「{location}」天气来判断：{weather_text}。IP 定位通常只到城市级，如果不准，直接告诉我真实种植地。"
+            return f"我先按「{location}」的天气来判断：{weather_text}。如果地点不对，直接告诉我真实种植地。"
+        return f"我先按「{location}」和你文字里的天气线索判断。若植株不在这个地点，直接补充真实种植地。"
 
     def _category_from_structured(self, structured_data: dict) -> str | None:
         categories = structured_data.get("possible_categories") or []
@@ -1086,14 +1115,6 @@ class CaseOrchestrator:
             case.days_to_harvest = correction_days
         if corrections.get("recent_weather"):
             case.recent_weather = corrections["recent_weather"]
-        if corrections.get("location_text"):
-            current = dict(case.structured_data or {})
-            weather = dict(current.get("weather_observation") or {})
-            weather["location"] = corrections["location_text"]
-            weather["location_source"] = "llm_correction"
-            current["weather_observation"] = weather
-            case.structured_data = current
-
         if raw.get("growth_stage") and not case.growth_stage:
             case.growth_stage = raw["growth_stage"]
         if raw.get("recent_weather") and not case.recent_weather:

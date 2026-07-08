@@ -50,9 +50,6 @@ class LocationTool:
         browser_location_source: str | None = None,
         browser_location_error: str | None = None,
         explicit_location: str | None = None,
-        previous_location: str | None = None,
-        previous_location_source: str | None = None,
-        previous_adcode: str | None = None,
     ) -> LocationObservation:
         language = self._observe_language_location(user_message) if user_message.strip() else None
         if not explicit_location and language and language.explicit_location:
@@ -74,16 +71,6 @@ class LocationTool:
                 language_confidence=language.confidence if language else None,
                 evidence=language.evidence if language else [],
                 uncertainties=geocoded.get("uncertainties", []) + (language.uncertainties if language else []),
-            )
-
-        if previous_location and previous_location_source in {"user_explicit", "case_memory_user_location"}:
-            return LocationObservation(
-                location=previous_location,
-                location_source="case_memory_user_location",
-                adcode=previous_adcode,
-                requires_confirmation=True,
-                note="沿用该病例之前确认过的地点；如果植株不在那里，需要用户纠正。",
-                uncertainties=language.uncertainties if language else [],
             )
 
         if browser_latitude is not None and browser_longitude is not None:

@@ -156,9 +156,9 @@ flowchart TB
 
 `AgentDecisionEngine` 是 Agent 的思考和决策核心。它综合本轮用户输入、语义观察、视觉观察、地点、天气、日期、复查任务和历史摘要，直接输出诊断判断、处置计划、复查安排、用户意图、回答焦点和下一步动作。
 
-`SemanticObservationTool` 只理解用户本轮文本和病例文字记忆，判断用户意图、是否复查、复查趋势、用户纠正和症状语义。它不负责地点、天气、图片阶段或最终诊断。
+`SemanticObservationTool` 只理解用户本轮文本和病例文字记忆，判断用户意图、是否复查、复查趋势、用户纠正和症状语义。它不负责地理编码、真实天气、图片阶段或最终诊断；如果用户在语义上纠正了地点，只把新地点写入 `corrections.location_text`，后续由 `LocationTool` 标准化。
 
-`LocationTool` 只负责地点。它只在一个 Case 的首轮或用户明确更新种植地点时运行：优先让 LLM 判断用户本轮是否明确给出实际种植地点；如果有，就用高德地理编码；如果没有，再用客户端坐标或高德 IP 定位兜底，并要求用户确认。后续轮次默认沿用 Case Memory 中已经确认的种植地点，避免用户走动时把植株地点改成当前位置。
+`LocationTool` 只负责地点标准化。它只在一个 Case 尚未锁定地点，或 `SemanticObservationTool` 判断用户明确更新种植地点时运行：优先让 LLM 判断用户本轮是否明确给出实际种植地点；如果有，就用高德地理编码；如果没有，再用客户端坐标或高德 IP 定位兜底，并要求用户确认一次。拿到可用地点后写入 Case Memory 并锁定，后续轮次默认沿用该地点，避免用户走动时把植株地点改成当前位置。
 
 `WeatherTool` 只负责查真实天气。它每轮都会根据 Case Memory 中的种植地点/adcode 调高德天气 API，不再从用户文字中抽取“阴雨/高湿”等语义。用户说的天气事实由 SemanticObservationTool 放入上下文，交给 AgentDecisionEngine 综合。
 
@@ -214,7 +214,7 @@ flowchart TB
 3. `DateTool` 获取当前日期。
 4. `VisionTool` 分析图片，如果没有图片则跳过。
 5. `SemanticObservationTool` 理解本轮文本语义。
-6. `LocationTool` 在首轮或用户明确更新地点时解析实际种植地点；其他轮次沿用 Case Memory。
+6. `LocationTool` 在病例尚未锁定地点或用户明确更新地点时解析实际种植地点；拿到可用地点后仅确认一次，其他轮次沿用 Case Memory。
 7. `WeatherTool` 每轮根据病例种植地点查询真实天气。
 8. `CaseOrchestrator` 读取 Case/Event/Follow-up Memory，组装 Working Memory。
 9. `AgentDecisionEngine` 输出本轮诊断、计划、动作、复查、用户意图和回答焦点。
