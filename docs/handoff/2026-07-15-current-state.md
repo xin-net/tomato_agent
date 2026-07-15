@@ -217,11 +217,3 @@ npm run dev
   - 前端相关改动时跑 `npm run build`
 
 - 用户倾向于希望每次有意义改动后提交并推送。
-
-## 新对话建议开场
-
-在新 Codex 对话中建议直接说：
-
-```text
-请先阅读 docs/handoff/2026-07-15-current-state.md、docs/agent-architecture.md、docs/llm-prompts.md 和 docs/development/backend-mvp.md。不要沿用旧聊天记忆，按仓库文档理解当前状态。我的新架构方向在另一份文档里，等我提供后再开始改。
-```
